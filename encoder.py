@@ -45,12 +45,14 @@ class Encoder:
         destination.parent.mkdir(parents=True, exist_ok=True)
         
         # Build FFmpeg command
-        # Add explicit profile to ensure VBR compatibility and suppress warning note
+        # -vn: Skip video streams (embedded cover art will be handled by metadata.py)
+        # -profile:a aac_low: Ensures VBR compatibility
         cmd = [
             self.ffmpeg_bin,
             '-i', str(source),
+            '-vn',  # Ignore video/image streams (cover art)
             '-c:a', 'libfdk_aac',
-            '-profile:a', 'aac_low',  # Ensures VBR works with standard parameters
+            '-profile:a', 'aac_low',
             '-vbr', str(self.vbr_quality),
             '-y',  # Overwrite output file
             str(destination)
