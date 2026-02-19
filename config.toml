@@ -1,0 +1,103 @@
+# ─────────────────────────────────────────────────────────────
+# flac2aac Configuration File
+# ─────────────────────────────────────────────────────────────
+# Configuration for converting FLAC files to AAC format using
+# FDK-AAC encoder with metadata preservation and loudness tagging.
+# ─────────────────────────────────────────────────────────────
+
+[paths]
+# Source directory containing FLAC files (scanned recursively)
+# The directory structure will be preserved in the output
+input_dir = "/music/flac"
+
+# Destination root directory for converted AAC files
+# Directory structure from input_dir will be mirrored here
+output_dir = "/music/aac"
+
+# Path to ffmpeg binary
+# Use "ffmpeg" if it's on your system PATH, or provide full path
+# Example: "/usr/local/bin/ffmpeg" or "C:\\ffmpeg\\bin\\ffmpeg.exe"
+ffmpeg_bin = "ffmpeg"
+
+
+[encoding]
+# FDK-AAC VBR quality setting (1-5)
+# 1 = lowest quality (~32 kbps per channel)
+# 3 = medium quality (~128 kbps per channel)  
+# 5 = highest quality (~256 kbps per channel, recommended)
+vbr_quality = 5
+
+# Output container format
+# Options: "m4a" or "mp4" (both are MPEG-4 containers)
+output_format = "m4a"
+
+
+[metadata]
+# Copy embedded album artwork from FLAC to M4A files
+copy_artwork = true
+
+# Standalone cover art file handling
+[metadata.cover_file]
+# Enable copying/extracting cover art as separate image file
+enabled = true
+
+# Filenames to search for in source directories (checked in order)
+# First matching file will be copied to the output directory
+# Common conventions:
+#   - cover.jpg: Used by many music players and taggers
+#   - folder.jpg: Windows Media Player, Foobar2000
+#   - front.jpg: MusicBrainz Picard default
+search_names = ["cover.jpg", "folder.jpg", "front.jpg", "Cover.jpg"]
+
+# Fallback filename when extracting from FLAC embedded art
+# Used when no standalone cover file is found in source directory
+fallback_name = "cover.jpg"
+
+# Maximum width/height for cover images in pixels
+# Set to 0 to disable resizing (keep original dimensions)
+# Recommended: 1000-2000 for good quality with reasonable file size
+max_size = 2000
+
+# JPEG quality for conversion/resizing (1-95)
+# Only applies when converting PNG to JPEG or when resizing
+# 90-95 provides excellent quality with minimal artifacts
+jpeg_quality = 95
+
+
+[loudness]
+# Enable EBU R128 / ReplayGain 2.0 loudness analysis and tagging
+# Adds REPLAYGAIN_TRACK_GAIN, REPLAYGAIN_TRACK_PEAK,
+# REPLAYGAIN_ALBUM_GAIN, and REPLAYGAIN_ALBUM_PEAK tags
+enable_replaygain = true
+
+# Enable iTunes SoundCheck (iTunNORM) tag generation
+# Converts ReplayGain data to Apple's proprietary format
+# for volume normalization in iTunes, Music.app, and iOS
+enable_itunes_soundcheck = true
+
+# Reference loudness target in LUFS (Loudness Units relative to Full Scale)
+# EBU R128 standard: -18.0 LUFS (broadcast)
+# Alternative common targets:
+#   -16.0 LUFS: Spotify, YouTube
+#   -14.0 LUFS: Tidal, Amazon Music
+#   -18.0 LUFS: iTunes/Apple Music (recommended)
+reference_loudness = -18.0
+
+
+[processing]
+# Number of parallel encoding workers
+# Set to number of CPU cores for optimal performance
+# Encoding is CPU-intensive; 4-8 workers typical for modern CPUs
+workers = 4
+
+# Overwrite existing files in output directory
+# false: Skip files that already exist (faster for re-runs)
+# true: Always re-encode and overwrite existing files
+overwrite_existing = false
+
+# Logging verbosity level
+# DEBUG: Detailed information for troubleshooting
+# INFO: General informational messages (recommended)
+# WARNING: Only warnings and errors
+# ERROR: Only error messages
+log_level = "INFO"

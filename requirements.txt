@@ -1,0 +1,9 @@
+# Core dependencies
+mutagen>=1.47.0
+r128gain>=1.0.7
+
+# Image processing (optional, for cover art)
+Pillow>=10.0.0
+
+# TOML parsing (Python < 3.11)
+tomli>=2.0.0; python_version < '3.11'
