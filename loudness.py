@@ -105,9 +105,27 @@ class LoudnessProcessor:
             try:
                 m4a = MP4(m4a_file)
                 
-                # Get ReplayGain track gain if available
-                rg_key = '----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN'
-                rg_gain = self._get_replaygain_value(m4a, rg_key)
+                # DEBUG: Log all available keys
+                logger.debug(f"Available keys in {m4a_file.name}: {list(m4a.keys())}")
+                
+                # Try different possible key formats
+                possible_keys = [
+                    '----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN',
+                    '----:com.apple.iTunes:replaygain_track_gain',
+                    'REPLAYGAIN_TRACK_GAIN',
+                    'replaygain_track_gain'
+                ]
+                
+                rg_gain = None
+                found_key = None
+                
+                for key in possible_keys:
+                    if key in m4a:
+                        found_key = key
+                        rg_gain = self._get_replaygain_value(m4a, key)
+                        if rg_gain is not None:
+                            logger.debug(f"Found ReplayGain at key '{key}': {rg_gain} dB")
+                            break
                 
                 if rg_gain is not None:
                     # Convert to iTunNORM format
@@ -118,7 +136,7 @@ class LoudnessProcessor:
                     m4a[itunnorm_key] = [MP4FreeForm(itunnorm.encode('utf-8'))]
                     m4a.save()
                     
-                    logger.debug(f"Added iTunNORM to {m4a_file.name}")
+                    logger.info(f"Added iTunNORM to {m4a_file.name} (gain: {rg_gain} dB)")
                 else:
                     logger.warning(
                         f"No ReplayGain data found for {m4a_file.name}, "
