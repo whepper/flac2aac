@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 try:
-    from mutagen.mp4 import MP4
+    from mutagen.mp4 import MP4, MP4FreeForm
 except ImportError:
     raise ImportError(
         "mutagen package required. Install with: pip install mutagen"
@@ -113,9 +113,9 @@ class LoudnessProcessor:
                     # Convert to iTunNORM format
                     itunnorm = self._replaygain_to_soundcheck(rg_gain)
                     
-                    # Write iTunNORM tag
+                    # Write iTunNORM tag as MP4FreeForm
                     itunnorm_key = '----:com.apple.iTunes:iTunNORM'
-                    m4a[itunnorm_key] = [itunnorm.encode('utf-8')]
+                    m4a[itunnorm_key] = [MP4FreeForm(itunnorm.encode('utf-8'))]
                     m4a.save()
                     
                     logger.debug(f"Added iTunNORM to {m4a_file.name}")
@@ -129,7 +129,9 @@ class LoudnessProcessor:
                 logger.error(f"Failed to add iTunNORM to {m4a_file.name}: {e}")
     
     def _get_replaygain_value(self, m4a: MP4, key: str) -> Optional[float]:
-        """Extract ReplayGain value from M4A tags.
+        """Extract ReplayGain value from M4A freeform tags.
+        
+        r128gain writes ReplayGain tags as MP4FreeForm objects.
         
         Args:
             m4a: MP4 file object
@@ -142,16 +144,27 @@ class LoudnessProcessor:
             return None
         
         try:
-            # Value is stored as bytes, decode and parse
-            value_bytes = m4a[key][0]
-            value_str = value_bytes.decode('utf-8') if isinstance(value_bytes, bytes) else str(value_bytes)
+            # r128gain stores values as MP4FreeForm bytes
+            value = m4a[key][0]
+            
+            # MP4FreeForm objects store data as bytes
+            if isinstance(value, MP4FreeForm):
+                value_bytes = bytes(value)
+            elif isinstance(value, bytes):
+                value_bytes = value
+            else:
+                value_bytes = str(value).encode('utf-8')
+            
+            # Decode to string
+            value_str = value_bytes.decode('utf-8').strip()
             
             # Parse "+X.XX dB" or "-X.XX dB" format
-            gain_str = value_str.replace(' dB', '').strip()
+            # r128gain format example: "-7.23 dB"
+            gain_str = value_str.replace(' dB', '').replace('dB', '').strip()
             return float(gain_str)
         
-        except (ValueError, IndexError, AttributeError) as e:
-            logger.warning(f"Failed to parse ReplayGain value: {e}")
+        except (ValueError, IndexError, AttributeError, UnicodeDecodeError) as e:
+            logger.warning(f"Failed to parse ReplayGain value from {key}: {e}")
             return None
     
     def _replaygain_to_soundcheck(self, gain_db: float) -> str:
