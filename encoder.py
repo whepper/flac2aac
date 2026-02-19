@@ -45,10 +45,12 @@ class Encoder:
         destination.parent.mkdir(parents=True, exist_ok=True)
         
         # Build FFmpeg command
+        # Add explicit profile to ensure VBR compatibility and suppress warning note
         cmd = [
             self.ffmpeg_bin,
             '-i', str(source),
             '-c:a', 'libfdk_aac',
+            '-profile:a', 'aac_low',  # Ensures VBR works with standard parameters
             '-vbr', str(self.vbr_quality),
             '-y',  # Overwrite output file
             str(destination)
