@@ -67,6 +67,9 @@ class LoudnessProcessor:
     def _add_replaygain_tags(self, m4a_files: List[Path]) -> None:
         """Add ReplayGain 2.0 tags using r128gain.
         
+        Note: r128gain uses a fixed reference of -18 LUFS (ReplayGain 2.0 standard).
+        The target_loudness config option is only used for iTunNORM calculation.
+        
         Args:
             m4a_files: List of M4A files
         """
@@ -78,13 +81,13 @@ class LoudnessProcessor:
             logger.debug(f"Running R128 analysis on {len(file_paths)} file(s)")
             
             # Use r128gain as library
-            # Album mode: True for album gain, False for track gain only
+            # r128gain uses fixed -18 LUFS reference (ReplayGain 2.0 standard)
+            # It does not accept target_loudness parameter
             r128gain.process(
                 file_paths,
                 album_gain=True,
                 skip_tagged=False,
-                opus_output_gain=False,
-                target_loudness=self.reference
+                opus_output_gain=False
             )
             
             logger.info(f"Added ReplayGain tags to {len(m4a_files)} file(s)")
