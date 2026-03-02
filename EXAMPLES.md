@@ -1,318 +1,211 @@
-# Usage Examples
+# flac2aac — Examples
 
-## Directory Structure Example
+## Table of Contents
 
-### Input Directory
+1. [Quick start](#quick-start)
+2. [RAM disk workflow](#ram-disk-workflow)
+3. [NAS / external drive workflow](#nas--external-drive-workflow)
+4. [Multiple quality profiles](#multiple-quality-profiles)
+5. [Linux FFmpeg build with libfdk_aac](#linux-ffmpeg-build-with-libfdk_aac)
+6. [Automation with cron / launchd](#automation)
 
-```
-/music/flac/
-├── Pink Floyd/
-│   ├── The Dark Side of the Moon (1973)/
-│   │   ├── cover.jpg
-│   │   ├── 01 - Speak to Me.flac
-│   │   ├── 02 - Breathe (In the Air).flac
-│   │   ├── 03 - On the Run.flac
-│   │   └── ...
-│   └── Wish You Were Here (1975)/
-│       ├── folder.jpg
-│       ├── 01 - Shine On You Crazy Diamond (Parts I-V).flac
-│       └── ...
-└── Miles Davis/
-    └── Kind of Blue (1959)/
-        ├── front.jpg
-        ├── 01 - So What.flac
-        └── ...
+---
+
+## Quick start
+
+```toml
+# config.toml — simplest possible setup
+[paths]
+input_dir  = "/Users/you/Music/FLAC"
+output_dir = "/Users/you/Music/AAC"
+ffmpeg_bin = "ffmpeg"
 ```
 
-### Output Directory (After Conversion)
-
-```
-/music/aac/
-├── Pink Floyd/
-│   ├── The Dark Side of the Moon (1973)/
-│   │   ├── cover.jpg                    # Copied from source
-│   │   ├── 01 - Speak to Me.m4a          # Encoded with metadata
-│   │   ├── 02 - Breathe (In the Air).m4a # + ReplayGain tags
-│   │   ├── 03 - On the Run.m4a           # + iTunNORM tags
-│   │   └── ...
-│   └── Wish You Were Here (1975)/
-│       ├── folder.jpg
-│       ├── 01 - Shine On You Crazy Diamond (Parts I-V).m4a
-│       └── ...
-└── Miles Davis/
-    └── Kind of Blue (1959)/
-        ├── front.jpg
-        ├── 01 - So What.m4a
-        └── ...
+```bash
+python main.py
 ```
 
-## Configuration Examples
+---
 
-### Minimal Configuration
+## RAM disk workflow
+
+Using a RAM disk as `work_dir` means the entire encode → tag → loudness
+analysis cycle happens in RAM. Only the final `shutil.move` per album
+writes to your destination storage.
+
+**Benefits:**
+- Dramatically faster on HDD or NAS destinations
+- Reduces write amplification on SSDs
+- Clean output: half-finished albums never appear in `output_dir`
+- On failure the RAM disk temp directory is cleaned up automatically
+
+### macOS — 1 GB RAM disk
+
+```bash
+# Create
+diskutil erasevolume HFS+ RAMDisk $(hdiutil attach -nomount ram://2097152)
+
+# Verify
+df -h /Volumes/RAMDisk
+
+# Remove when done
+hdiutil detach /Volumes/RAMDisk
+```
 
 ```toml
 [paths]
-input_dir = "/music/flac"
-output_dir = "/music/aac"
+input_dir  = "/Users/you/Music/FLAC"
+output_dir = "/Users/you/Music/AAC"
+ffmpeg_bin = "ffmpeg"
+work_dir   = "/Volumes/RAMDisk"
 ```
 
-All other settings use defaults (VBR 5, metadata copy, ReplayGain, etc.)
+### Linux — tmpfs RAM disk
 
-### High-Performance Configuration
+```bash
+# Create
+sudo mkdir -p /mnt/ramdisk
+sudo mount -t tmpfs -o size=1G tmpfs /mnt/ramdisk
+
+# Verify
+df -h /mnt/ramdisk
+
+# Persist across reboots (/etc/fstab entry):
+# tmpfs  /mnt/ramdisk  tmpfs  defaults,size=1G  0  0
+```
 
 ```toml
 [paths]
-input_dir = "/mnt/ssd/flac"
-output_dir = "/mnt/ssd/aac"
+input_dir  = "/mnt/flac"
+output_dir = "/mnt/nas/aac"
+ffmpeg_bin = "ffmpeg"
+work_dir   = "/mnt/ramdisk"
+```
+
+### Sizing the RAM disk
+
+| Album type | Typical AAC size at VBR 5 | Recommended work_dir size |
+|---|---|---|
+| Standard album (10–15 tracks) | 80–150 MB | 512 MB |
+| Long album / live recording | 150–400 MB | 1 GB |
+| Large classical set | 400–800 MB | 2 GB |
+
+Only **one album at a time** occupies the working directory, so you
+generally do not need to size for your whole library.
+
+---
+
+## NAS / external drive workflow
+
+Writing directly to a NAS or slow external drive causes every encode,
+tag edit, and ReplayGain write to go over a slow bus. With `work_dir`
+set to a local SSD or RAM disk the NAS only sees the final move:
+
+```toml
+[paths]
+input_dir  = "/Volumes/NAS/Music/FLAC"
+output_dir = "/Volumes/NAS/Music/AAC"
+ffmpeg_bin = "ffmpeg"
+work_dir   = "/tmp/flac2aac_work"   # local SSD temp dir
 
 [processing]
-workers = 16              # Use all CPU cores
-log_level = "WARNING"     # Reduce logging overhead
-overwrite_existing = false
-
-[metadata.cover_file]
-max_size = 0              # Don't resize (faster)
+workers = 4
 ```
 
-### Mobile-Optimized Configuration
+---
 
-Smaller files for mobile devices:
+## Multiple quality profiles
 
-```toml
-[encoding]
-vbr_quality = 4           # Good quality, smaller files (~192 kbps)
-
-[metadata.cover_file]
-max_size = 1000           # Smaller cover art
-jpeg_quality = 85         # Smaller file size
-
-[loudness]
-reference_loudness = -16.0  # Spotify/streaming standard
-```
-
-### Archival Configuration
-
-Maximum quality preservation:
-
-```toml
-[encoding]
-vbr_quality = 5           # Highest quality
-
-[metadata.cover_file]
-max_size = 3000           # High-resolution covers
-jpeg_quality = 95         # Maximum JPEG quality
-
-[loudness]
-reference_loudness = -18.0  # EBU R128 broadcast standard
-```
-
-### Minimal Loudness Processing
-
-Skip loudness analysis (faster):
-
-```toml
-[loudness]
-enable_replaygain = false
-enable_itunes_soundcheck = false
-```
-
-## Command-Line Usage Examples
-
-### Convert Entire Library
+Create separate config files for different use cases:
 
 ```bash
-python main.py --config config.toml
-```
+# High quality for home listening
+cp config.toml config_hifi.toml
+# Set vbr_quality = 5 in config_hifi.toml
 
-### Test Run Before Converting
+# Smaller files for mobile / syncing
+cp config.toml config_mobile.toml
+# Set vbr_quality = 3 in config_mobile.toml
+```
 
 ```bash
-python main.py --dry-run
+python main.py --config config_hifi.toml
+python main.py --config config_mobile.toml
 ```
 
-Shows what will be processed without actually encoding.
+---
 
-### Convert Specific Collection
+## Linux FFmpeg build with libfdk_aac
 
-Create a separate config for each collection:
+libfdk_aac is non-free and excluded from most Linux distribution FFmpeg
+packages. Build it yourself:
 
 ```bash
-# Classical music
-python main.py --config config_classical.toml
+# 1. Install build dependencies
+sudo apt update
+sudo apt install -y build-essential autoconf automake libtool pkg-config \
+    nasm yasm libass-dev libfreetype6-dev libsdl2-dev libtool \
+    libva-dev libvdpau-dev libvorbis-dev libxcb-dev libxcb-shm0-dev \
+    libxcb-xfixes0-dev texinfo wget
 
-# Jazz collection  
-python main.py --config config_jazz.toml
+# 2. Build fdk-aac
+cd /tmp
+git clone https://github.com/mstorsjo/fdk-aac.git
+cd fdk-aac && autoreconf -fiv && ./configure && make -j$(nproc)
+sudo make install && sudo ldconfig
 
-# Rock collection
-python main.py --config config_rock.toml
+# 3. Build FFmpeg with fdk-aac
+cd /tmp
+git clone https://git.ffmpeg.org/ffmpeg.git --depth=1
+cd ffmpeg
+./configure --enable-libfdk-aac --enable-nonfree --enable-gpl
+make -j$(nproc)
+sudo make install
+
+# 4. Verify
+ffmpeg -codecs 2>/dev/null | grep fdk
+# Should show: DEA... aac_fdk
 ```
 
-### Incremental Updates
+---
 
-With `overwrite_existing = false`, only new files are processed:
+## Automation
+
+### macOS launchd (run nightly at 02:00)
+
+Create `~/Library/LaunchAgents/com.flac2aac.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.flac2aac</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/you/flac2aac/.venv/bin/python</string>
+    <string>/Users/you/flac2aac/main.py</string>
+    <string>--config</string>
+    <string>/Users/you/flac2aac/config.toml</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StandardOutPath</key><string>/tmp/flac2aac.log</string>
+  <key>StandardErrorPath</key><string>/tmp/flac2aac.err</string>
+</dict>
+</plist>
+```
 
 ```bash
-# First run: converts all files
-python main.py
-
-# Add more FLAC files to input directory
-# ...
-
-# Second run: only converts newly added files
-python main.py
+launchctl load ~/Library/LaunchAgents/com.flac2aac.plist
 ```
 
-### Verbose Debugging
-
-Temporarily override log level:
+### Linux cron (run nightly at 02:00)
 
 ```bash
-# Edit config.toml temporarily:
-# log_level = "DEBUG"
-
-python main.py
-```
-
-## Metadata Examples
-
-### Tags Preserved from FLAC
-
-```
-Original FLAC tags:
-  TITLE=Breathe (In the Air)
-  ARTIST=Pink Floyd
-  ALBUMARTIST=Pink Floyd
-  ALBUM=The Dark Side of the Moon
-  DATE=1973
-  TRACKNUMBER=2/10
-  DISCNUMBER=1/1
-  GENRE=Progressive Rock
-  COMPOSER=Roger Waters, David Gilmour
-```
-
-```
-Resulting M4A tags:
-  ©nam = Breathe (In the Air)
-  ©ART = Pink Floyd
-  aART = Pink Floyd
-  ©alb = The Dark Side of the Moon
-  ©day = 1973
-  trkn = (2, 10)
-  disk = (1, 1)
-  ©gen = Progressive Rock
-  ©wrt = Roger Waters, David Gilmour
-  
-  # Added by flac2aac:
-  ----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN = -7.2 dB
-  ----:com.apple.iTunes:REPLAYGAIN_TRACK_PEAK = 0.987654
-  ----:com.apple.iTunes:REPLAYGAIN_ALBUM_GAIN = -7.5 dB
-  ----:com.apple.iTunes:REPLAYGAIN_ALBUM_PEAK = 0.995123
-  ----:com.apple.iTunes:iTunNORM = 00000525 00000525 00000000 00000000...
-```
-
-## Performance Benchmarks
-
-### Typical Conversion Times
-
-Tested on: AMD Ryzen 9 5950X (16 cores), NVMe SSD
-
-| Album Size | Tracks | FLAC Size | M4A Size | Time (4 workers) | Time (16 workers) |
-|---|---|---|---|---|---|
-| Single | 1 | 35 MB | 8.2 MB | 4s | 4s |
-| EP | 6 | 180 MB | 42 MB | 18s | 8s |
-| Album | 12 | 420 MB | 98 MB | 45s | 15s |
-| Double Album | 24 | 850 MB | 195 MB | 90s | 28s |
-| Complete Box Set | 150 | 5.2 GB | 1.2 GB | 9m 30s | 2m 45s |
-
-### Space Savings
-
-Typical compression ratios (VBR 5):
-
-- FLAC (16-bit/44.1kHz): ~35 MB per track (lossless)
-- AAC VBR 5: ~8 MB per track (~23% of FLAC size)
-- Quality: Transparent for most listeners
-
-## Integration Examples
-
-### Cron Job (Automated Conversion)
-
-```bash
-#!/bin/bash
-# /usr/local/bin/flac2aac-auto.sh
-
-cd /home/user/flac2aac
-source venv/bin/activate
-python main.py --config /home/user/music-config.toml >> /var/log/flac2aac.log 2>&1
-```
-
-```cron
-# Run every night at 2 AM
-0 2 * * * /usr/local/bin/flac2aac-auto.sh
-```
-
-### Pre-commit Hook (Auto-convert on Music Library Changes)
-
-```bash
-#!/bin/bash
-# .git/hooks/post-merge
-
-if git diff --name-only HEAD@{1} HEAD | grep -q '\.flac$'; then
-    echo "FLAC files changed, running converter..."
-    python /path/to/flac2aac/main.py
-fi
-```
-
-### File Manager Integration (Nautilus)
-
-Create `~/.local/share/nautilus/scripts/Convert to AAC`:
-
-```bash
-#!/bin/bash
-# Convert selected FLAC files
-
-for file in "$@"; do
-    if [[ $file == *.flac ]]; then
-        python /path/to/flac2aac/main.py --config /path/to/config.toml
-    fi
-done
-```
-
-## Troubleshooting Examples
-
-### Check FFmpeg Codec Support
-
-```bash
-ffmpeg -codecs | grep fdk
-```
-
-Expected output:
-```
-DEA.L. aac          AAC (Advanced Audio Coding) (decoders: aac libfdk_aac)
-```
-
-### Verify ReplayGain Tags
-
-```bash
-# Install exiftool
-apt install libimage-exiftool-perl  # Ubuntu/Debian
-brew install exiftool               # macOS
-
-# Check tags
-exiftool output.m4a | grep -i replay
-```
-
-### Manual r128gain Test
-
-```bash
-# Test r128gain directly
-r128gain -a -r /path/to/output/*.m4a
-```
-
-### Validate Output Quality
-
-```bash
-# Check bitrate
-ffprobe output.m4a 2>&1 | grep bitrate
-
-# Expected: ~250-280 kbps for VBR 5
+crontab -e
+# Add:
+0 2 * * * /home/you/flac2aac/.venv/bin/python /home/you/flac2aac/main.py \
+  --config /home/you/flac2aac/config.toml >> /var/log/flac2aac.log 2>&1
 ```

@@ -1,289 +1,228 @@
 # flac2aac
 
-A Python application that converts FLAC audio files to AAC format using the high-quality FDK-AAC encoder. The converter preserves all metadata, maintains directory structure, and adds both ReplayGain 2.0 and iTunes SoundCheck loudness tags.
+A fast, parallel FLAC-to-AAC converter with full metadata preservation,
+cover art handling, ReplayGain 2.0 analysis, and iTunes SoundCheck tagging.
+
+Optionally uses a **working directory** (e.g. a RAM disk) so that all
+encoding, tagging, and loudness analysis are done in memory first;
+finished albums are then moved to the final output directory in a single
+operation — minimising writes to spinning disks, NAS shares, or SSDs.
+
+---
 
 ## Features
 
-- **High-Quality Encoding**: Uses FDK-AAC VBR mode 5 (highest quality, ~256 kbps)
-- **Complete Metadata Preservation**: Copies all tags from FLAC to M4A format
-- **Cover Art Handling**:
-  - Embeds cover art in M4A files
-  - Copies/extracts standalone cover files (cover.jpg, folder.jpg)
-  - Optional resizing and PNG to JPEG conversion
-- **Loudness Normalization**:
-  - ReplayGain 2.0 (EBU R128) track and album tags
-  - iTunes SoundCheck (iTunNORM) tag generation
-- **Directory Structure**: Mirrors source folder hierarchy
-- **Parallel Processing**: Multi-threaded encoding for speed
-- **Configurable**: All settings in a well-documented TOML file
-- **Modular Design**: Clean, maintainable codebase
+- Parallel FLAC-to-AAC encoding via FFmpeg + libfdk_aac (VBR 1-5)
+- Full FLAC metadata → M4A tag mapping (title, artist, album, year, track, disc, …)
+- Embedded cover art copied to M4A files
+- Standalone `cover.jpg` copied/extracted per album
+- EBU R128 / ReplayGain 2.0 track & album gain tagging (via r128gain)
+- iTunes SoundCheck (iTunNORM) tag generation
+- **Working directory support** — encode to RAM disk, move to output when done
+- Recursive directory scanning with mirrored output structure
+- Configurable via a single `config.toml` file
+
+---
 
 ## Requirements
 
-### System Dependencies
+### Python
 
-- **Python 3.9+** (3.11+ recommended for built-in TOML support)
-- **FFmpeg** with **libfdk_aac** codec support
+- Python 3.9+
+- Dependencies: `pip install -r requirements.txt`
 
-### Installing FFmpeg with libfdk_aac
+### FFmpeg with libfdk_aac
 
-**macOS (Homebrew):**
+**macOS (Homebrew)**
 ```bash
-brew install ffmpeg --with-fdk-aac
+brew install ffmpeg
 ```
 
-**Ubuntu/Debian:**
+**Ubuntu / Debian**
+
+libfdk_aac is non-free and must be compiled from source or sourced from a
+third-party repo:
 ```bash
-sudo apt update
-sudo apt install ffmpeg
+# Option 1: nonfree PPA (Ubuntu)
+sudo add-apt-repository ppa:savoury1/ffmpeg4
+sudo apt update && sudo apt install ffmpeg
+
+# Option 2: compile FFmpeg + fdk-aac from source (see EXAMPLES.md)
 ```
 
-**Windows:**
-Download FFmpeg builds with libfdk_aac from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or compile from source.
-
-**Verify libfdk_aac support:**
+**Arch Linux**
 ```bash
-ffmpeg -codecs | grep libfdk_aac
+yay -S ffmpeg-libfdk_aac
 ```
 
-### Python Dependencies
-
-Install required packages:
-
-```bash
-pip install -r requirements.txt
-```
-
-Core dependencies:
-- `mutagen` - Audio metadata handling
-- `r128gain` - ReplayGain 2.0 / EBU R128 analysis
-- `Pillow` - Image processing (optional)
-- `tomli` - TOML parsing (Python < 3.11)
+---
 
 ## Installation
 
-1. Clone the repository:
 ```bash
 git clone https://github.com/whepper/flac2aac.git
 cd flac2aac
-```
-
-2. Install Python dependencies:
-```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-3. Copy and edit configuration:
-```bash
-cp config.toml my_config.toml
-# Edit my_config.toml with your paths and preferences
-```
+---
 
 ## Configuration
 
-All settings are configured in `config.toml`. Key sections:
+Copy and edit `config.toml`:
 
-### Paths
+```bash
+cp config.toml my_config.toml
+```
+
+### Minimal configuration
+
 ```toml
 [paths]
-input_dir = "/music/flac"     # Source FLAC directory
-output_dir = "/music/aac"     # Destination AAC directory
-ffmpeg_bin = "ffmpeg"         # FFmpeg binary path
+input_dir  = "/music/flac"
+output_dir = "/music/aac"
+ffmpeg_bin = "ffmpeg"
 ```
 
-### Encoding
+### With RAM disk working directory
+
+Set `work_dir` to a RAM disk mountpoint. All processing happens in RAM;
+only the final `shutil.move` writes to your output storage.
+
 ```toml
-[encoding]
-vbr_quality = 5               # FDK-AAC VBR (1-5, 5=highest)
-output_format = "m4a"         # Container format
+[paths]
+input_dir  = "/music/flac"
+output_dir = "/music/aac"
+ffmpeg_bin = "ffmpeg"
+work_dir   = "/Volumes/RAMDisk"   # macOS example
+# work_dir = "/mnt/ramdisk"       # Linux example
 ```
 
-### Metadata & Cover Art
-```toml
-[metadata]
-copy_artwork = true
+Leave `work_dir` commented out (or omit it) to write directly to
+`output_dir` as before.
 
-[metadata.cover_file]
-enabled = true
-search_names = ["cover.jpg", "folder.jpg", "front.jpg"]
-fallback_name = "cover.jpg"
-max_size = 2000               # Resize to max dimension (0=disable)
-jpeg_quality = 95
+> **RAM disk sizing**: the working directory only needs to hold **one
+> album at a time**. ~500 MB is sufficient for typical albums at VBR 5.
+
+#### Creating a RAM disk
+
+**macOS** — create a 1 GB RAM disk:
+```bash
+diskutil erasevolume HFS+ RAMDisk $(hdiutil attach -nomount ram://2097152)
+# Mountpoint: /Volumes/RAMDisk
+# Remove when done:
+# hdiutil detach /Volumes/RAMDisk
 ```
 
-### Loudness
-```toml
-[loudness]
-enable_replaygain = true
-enable_itunes_soundcheck = true
-reference_loudness = -18.0    # LUFS target
+**Linux** — mount a tmpfs:
+```bash
+sudo mkdir -p /mnt/ramdisk
+sudo mount -t tmpfs -o size=1G tmpfs /mnt/ramdisk
+# Persist across reboots by adding to /etc/fstab:
+# tmpfs  /mnt/ramdisk  tmpfs  defaults,size=1G  0  0
 ```
 
-### Processing
-```toml
-[processing]
-workers = 4                   # Parallel encoding threads
-overwrite_existing = false    # Skip existing files
-log_level = "INFO"
-```
+---
 
 ## Usage
 
-### Basic Usage
-
 ```bash
+# Default config
 python main.py
-```
 
-This uses `config.toml` in the current directory.
+# Custom config file
+python main.py --config my_config.toml
 
-### Custom Configuration
-
-```bash
-python main.py --config /path/to/my_config.toml
-```
-
-### Dry Run
-
-See what would be processed without actually encoding:
-
-```bash
+# Dry run — scan and report without encoding
 python main.py --dry-run
 ```
 
-### Help
+---
 
-```bash
-python main.py --help
+## Configuration Reference
+
+### `[paths]`
+
+| Key | Default | Description |
+|---|---|---|
+| `input_dir` | *(required)* | FLAC source directory (scanned recursively) |
+| `output_dir` | *(required)* | AAC output root directory |
+| `ffmpeg_bin` | `"ffmpeg"` | Path to FFmpeg binary |
+| `work_dir` | *(disabled)* | Working directory for intermediate files (RAM disk recommended) |
+
+### `[encoding]`
+
+| Key | Default | Description |
+|---|---|---|
+| `vbr_quality` | `5` | FDK-AAC VBR quality 1–5 (5 = highest) |
+| `output_format` | `"m4a"` | Container: `"m4a"` or `"mp4"` |
+
+### `[metadata]`
+
+| Key | Default | Description |
+|---|---|---|
+| `copy_artwork` | `true` | Embed cover art in M4A files |
+| `cover_file.enabled` | `true` | Copy standalone cover file per album |
+| `cover_file.search_names` | `["cover.jpg", …]` | Cover filenames to look for |
+| `cover_file.max_size` | `2000` | Max cover dimension in pixels (0 = no resize) |
+| `cover_file.jpeg_quality` | `95` | JPEG quality for resized covers |
+
+### `[loudness]`
+
+| Key | Default | Description |
+|---|---|---|
+| `enable_replaygain` | `true` | Write ReplayGain 2.0 tags |
+| `enable_itunes_soundcheck` | `true` | Write iTunes SoundCheck (iTunNORM) tag |
+| `reference_loudness` | `-18.0` | Target in LUFS (informational; r128gain uses −18 LUFS fixed) |
+
+### `[processing]`
+
+| Key | Default | Description |
+|---|---|---|
+| `workers` | `4` | Parallel encoding threads per album |
+| `overwrite_existing` | `false` | Re-encode files that already exist in output |
+| `log_level` | `"INFO"` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+
+---
+
+## Output structure
+
+The input directory tree is mirrored exactly:
+
+```
+input_dir/
+  Artist/
+    Artist - Album/
+      01 - Track.flac
+      cover.jpg
+
+output_dir/
+  Artist/
+    Artist - Album/
+      01 - Track.m4a   ← encoded + fully tagged
+      cover.jpg         ← copied standalone cover
 ```
 
-## Module Overview
+---
 
-- **`main.py`** - Entry point and CLI interface
-- **`config.py`** - Configuration loading and validation
-- **`scanner.py`** - File discovery and path mapping
-- **`encoder.py`** - FFmpeg wrapper for FLAC→AAC encoding
-- **`metadata.py`** - Tag mapping and cover art handling
-- **`loudness.py`** - ReplayGain and iTunes SoundCheck tagging
-- **`pipeline.py`** - Orchestrates the complete workflow
-
-## Processing Workflow
-
-1. **Scan** - Discover all FLAC files recursively
-2. **Group** - Organize files by album directory
-3. **Encode** (parallel) - Convert FLAC to AAC with metadata
-4. **Cover Art** - Copy/extract standalone cover files
-5. **Loudness** - Analyze and tag with ReplayGain + iTunNORM
-
-## Tag Mapping
-
-| FLAC (Vorbis Comment) | M4A (MP4 Atom) |
-|---|---|
-| TITLE | ©nam |
-| ARTIST | ©ART |
-| ALBUMARTIST | aART |
-| ALBUM | ©alb |
-| DATE / YEAR | ©day |
-| TRACKNUMBER | trkn |
-| DISCNUMBER | disk |
-| GENRE | ©gen |
-| COMMENT | ©cmt |
-| COMPOSER | ©wrt |
-| Cover Art | covr |
-
-Additional tags added:
-- `REPLAYGAIN_TRACK_GAIN` / `REPLAYGAIN_TRACK_PEAK`
-- `REPLAYGAIN_ALBUM_GAIN` / `REPLAYGAIN_ALBUM_PEAK`
-- `iTunNORM` (iTunes SoundCheck)
-
-## Example Output
+## Pipeline overview
 
 ```
-2026-02-19 19:42:15 - __main__ - INFO - FLAC to AAC Converter starting
-2026-02-19 19:42:15 - __main__ - INFO - Input: /music/flac
-2026-02-19 19:42:15 - __main__ - INFO - Output: /music/aac
-2026-02-19 19:42:15 - scanner - INFO - Found 47 FLAC file(s)
-2026-02-19 19:42:15 - pipeline - INFO - Organized into 5 album(s)
-
-2026-02-19 19:42:15 - pipeline - INFO - Processing album: /music/flac/Artist/Album
-2026-02-19 19:42:15 - pipeline - INFO - Encoding 10 track(s)...
-2026-02-19 19:42:47 - pipeline - INFO - Processing cover art...
-2026-02-19 19:42:47 - pipeline - INFO - Analyzing loudness and adding tags...
-
-============================================================
-Conversion Summary
-============================================================
-Total files processed: 47
-Successful: 47
-Failed: 0
-Skipped: 0
-Albums processed: 5
-============================================================
+For each album:
+  ┌─ work_dir/album/    (RAM disk)    ─── or ─── output_dir/album/
+  │
+  ├─ 1. Encode FLAC → M4A            (parallel, FFmpeg + libfdk_aac)
+  ├─ 2. Copy FLAC metadata → M4A     (mutagen)
+  ├─ 3. Copy / extract cover art     (Pillow)
+  ├─ 4. EBU R128 loudness analysis   (r128gain)
+  ├─ 5. Write ReplayGain + iTunNORM  (mutagen)
+  └─ 6. Move album → output_dir      (shutil.move — one write per file)
 ```
 
-## Troubleshooting
-
-### FFmpeg not found
-
-Error: `FFmpeg binary not found: ffmpeg`
-
-**Solution**: Install FFmpeg or provide full path in `config.toml`:
-```toml
-ffmpeg_bin = "/usr/local/bin/ffmpeg"
-```
-
-### libfdk_aac not available
-
-Error: `FFmpeg found but libfdk_aac codec is not available`
-
-**Solution**: Reinstall FFmpeg with libfdk_aac support (see Requirements)
-
-### r128gain warnings
-
-Warning: `r128gain not installed. ReplayGain tagging disabled.`
-
-**Solution**: Install r128gain:
-```bash
-pip install r128gain
-```
-
-### Pillow warnings
-
-Warning: `Pillow not installed. PNG to JPEG conversion disabled.`
-
-**Solution**: Install Pillow:
-```bash
-pip install Pillow
-```
-
-## Performance Tips
-
-- Set `workers` to match your CPU core count
-- Use SSD storage for both input and output
-- Disable `overwrite_existing` for incremental conversions
-- Set `log_level = "WARNING"` for faster processing (less I/O)
+---
 
 ## License
 
-MIT License - see LICENSE file for details
-
-## Contributing
-
-Contributions welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## Author
-
-Created by Jeroen (whepper)
-
-## Acknowledgments
-
-- FFmpeg project and libfdk_aac developers
-- mutagen audio metadata library
-- r128gain for EBU R128 implementation
-- Community feedback and testing
+MIT — see [LICENSE](LICENSE).
