@@ -19,11 +19,27 @@ output_dir = "/music/aac"
 # Example: "/usr/local/bin/ffmpeg" or "C:\\ffmpeg\\bin\\ffmpeg.exe"
 ffmpeg_bin = "ffmpeg"
 
+# Working directory for intermediate files during processing
+# All encoding, tagging and loudness analysis is done here first;
+# finished albums are then moved to output_dir in one operation.
+# This minimises writes to your final storage device.
+#
+# Recommended: a RAM disk for maximum speed and minimal disk wear
+#   macOS  : create one with hdiutil, e.g. /Volumes/RAMDisk
+#   Linux  : mount tmpfs,             e.g. /mnt/ramdisk
+#
+# Leave commented out (or set to "") to disable and write
+# directly to output_dir (original behaviour).
+#
+# IMPORTANT: The RAM disk must have enough free space to hold
+# one fully processed album at a time (~500 MB is usually enough).
+# work_dir = "/Volumes/RAMDisk"
+
 
 [encoding]
 # FDK-AAC VBR quality setting (1-5)
 # 1 = lowest quality (~32 kbps per channel)
-# 3 = medium quality (~128 kbps per channel)  
+# 3 = medium quality (~128 kbps per channel)
 # 5 = highest quality (~256 kbps per channel, recommended)
 vbr_quality = 5
 

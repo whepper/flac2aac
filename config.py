@@ -6,7 +6,7 @@ Loads and validates TOML configuration files.
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -25,10 +25,13 @@ class PathsConfig:
     input_dir: Path
     output_dir: Path
     ffmpeg_bin: str = "ffmpeg"
-    
+    work_dir: Optional[Path] = None
+
     def __post_init__(self):
         self.input_dir = Path(self.input_dir).expanduser().resolve()
         self.output_dir = Path(self.output_dir).expanduser().resolve()
+        if self.work_dir is not None:
+            self.work_dir = Path(self.work_dir).expanduser().resolve()
 
 
 @dataclass
@@ -36,7 +39,7 @@ class EncodingConfig:
     """Encoding configuration."""
     vbr_quality: int = 5
     output_format: str = "m4a"
-    
+
     def __post_init__(self):
         if not 1 <= self.vbr_quality <= 5:
             raise ValueError("vbr_quality must be between 1 and 5")
@@ -54,7 +57,7 @@ class CoverFileConfig:
     fallback_name: str = "cover.jpg"
     max_size: int = 2000
     jpeg_quality: int = 95
-    
+
     def __post_init__(self):
         if self.max_size < 0:
             raise ValueError("max_size must be >= 0")
@@ -75,7 +78,7 @@ class LoudnessConfig:
     enable_replaygain: bool = True
     enable_itunes_soundcheck: bool = True
     reference_loudness: float = -18.0
-    
+
     def __post_init__(self):
         if not -30.0 <= self.reference_loudness <= 0.0:
             raise ValueError("reference_loudness must be between -30.0 and 0.0 LUFS")
@@ -87,7 +90,7 @@ class ProcessingConfig:
     workers: int = 4
     overwrite_existing: bool = False
     log_level: str = "INFO"
-    
+
     def __post_init__(self):
         if self.workers < 1:
             raise ValueError("workers must be >= 1")
@@ -108,30 +111,30 @@ class Config:
 
 def load_config(config_path: Path) -> Config:
     """Load and validate configuration from TOML file.
-    
+
     Args:
         config_path: Path to config.toml file
-        
+
     Returns:
         Validated Config object
-        
+
     Raises:
         FileNotFoundError: If config file doesn't exist
         ValueError: If configuration is invalid
     """
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
-    
+
     with open(config_path, 'rb') as f:
         data = tomllib.load(f)
-    
+
     # Parse nested structures
     cover_file_data = data.get('metadata', {}).get('cover_file', {})
     cover_file = CoverFileConfig(**cover_file_data)
-    
-    metadata_data = data.get('metadata', {})
+
+    metadata_data = {k: v for k, v in data.get('metadata', {}).items() if k != 'cover_file'}
     metadata_data['cover_file'] = cover_file
-    
+
     return Config(
         paths=PathsConfig(**data['paths']),
         encoding=EncodingConfig(**data.get('encoding', {})),
