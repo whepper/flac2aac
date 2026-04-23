@@ -10,8 +10,16 @@ import logging
 import sys
 from pathlib import Path
 
-from config import load_config
+from config import ConfigError, load_config
 from pipeline import Pipeline
+
+
+# Exit codes. Distinct values let shell scripts tell configuration
+# problems apart from runtime encode failures.
+EXIT_OK = 0
+EXIT_RUNTIME = 1       # some files/albums failed, ffmpeg missing, etc.
+EXIT_CONFIG = 2        # config not found, malformed, or invalid
+EXIT_SIGINT = 130      # Ctrl+C
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -61,10 +69,13 @@ def main() -> int:
         config = load_config(args.config)
     except FileNotFoundError:
         logger.error(f"Configuration file '{args.config}' not found.")
-        return 1
+        return EXIT_CONFIG
+    except ConfigError as e:
+        logger.error(f"Invalid configuration: {e}")
+        return EXIT_CONFIG
     except Exception as e:
         logger.error(f"Error loading configuration: {e}")
-        return 1
+        return EXIT_CONFIG
 
     setup_logging(config.processing.log_level)
 
@@ -87,16 +98,18 @@ def main() -> int:
         logger.info(f"Failed: {stats.failed}")
         logger.info(f"Skipped: {stats.skipped}")
         logger.info(f"Albums processed: {stats.albums_processed}")
+        logger.info(f"Albums failed:    {stats.albums_failed}")
         logger.info("="*60)
-        
-        return 0 if stats.failed == 0 else 1
+
+        ran_clean = stats.failed == 0 and stats.albums_failed == 0
+        return EXIT_OK if ran_clean else EXIT_RUNTIME
         
     except KeyboardInterrupt:
         logger.warning("\nOperation cancelled by user")
-        return 130
+        return EXIT_SIGINT
     except Exception as e:
         logger.exception(f"Fatal error: {e}")
-        return 1
+        return EXIT_RUNTIME
 
 
 if __name__ == '__main__':

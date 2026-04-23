@@ -103,6 +103,12 @@ enable_itunes_soundcheck = true
 #   -18.0 LUFS: iTunes/Apple Music (recommended)
 reference_loudness = -18.0
 
+# When true and every source FLAC in an album already has
+# REPLAYGAIN_TRACK_GAIN tagged, those values are copied straight to
+# the output and the (slow) r128gain pass is skipped. Leave false
+# if you want the converter to always re-analyse from the audio.
+reuse_existing_replaygain = false
+
 
 [processing]
 # Number of parallel encoding workers

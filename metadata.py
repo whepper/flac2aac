@@ -81,6 +81,14 @@ class MetadataHandler:
             logger.error(f"Failed to copy metadata from {source.name}: {e}")
             raise
     
+    # Fallback Vorbis keys for track/disc totals when the FLAC
+    # stores the total as a separate tag rather than the combined
+    # ``5/12`` form in tracknumber/discnumber.
+    _TOTAL_FALLBACK_KEYS = {
+        'tracknumber': ('tracktotal', 'totaltracks'),
+        'discnumber': ('disctotal', 'totaldiscs'),
+    }
+
     def _copy_text_tags(self, flac: FLAC, m4a: MP4) -> None:
         """Copy text tags from FLAC to M4A.
 
@@ -102,7 +110,12 @@ class MetadataHandler:
                 try:
                     parts = str(values[0]).split('/')
                     track_num = int(parts[0])
-                    total = int(parts[1]) if len(parts) > 1 else 0
+                    if len(parts) > 1:
+                        total = int(parts[1])
+                    else:
+                        total = self._lookup_total(
+                            flac, self._TOTAL_FALLBACK_KEYS[vorbis_key]
+                        )
                     m4a[mp4_key] = [(track_num, total)]
                 except (ValueError, IndexError):
                     logger.warning(f"Invalid {vorbis_key} format: {values[0]}")
@@ -111,6 +124,20 @@ class MetadataHandler:
                 m4a[mp4_key] = [str(v) for v in values]
 
             written.add(mp4_key)
+
+    @staticmethod
+    def _lookup_total(flac: FLAC, keys: tuple) -> int:
+        """Return the first parseable integer found under any of ``keys``,
+        or ``0`` when none is available."""
+        for key in keys:
+            values = flac.get(key, [])
+            if not values:
+                continue
+            try:
+                return int(str(values[0]).split('/')[0])
+            except (ValueError, IndexError):
+                continue
+        return 0
     
     def _copy_cover_art(self, flac: FLAC, m4a: MP4) -> None:
         """Copy embedded cover art from FLAC to M4A.

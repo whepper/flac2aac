@@ -4,9 +4,9 @@ Loads and validates TOML configuration files.
 """
 
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Type
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -17,6 +17,10 @@ else:
         raise ImportError(
             "Python < 3.11 requires 'tomli' package. Install with: pip install tomli"
         )
+
+
+class ConfigError(ValueError):
+    """Raised for invalid or unknown configuration."""
 
 
 # Validation bounds. Kept as module-level constants so the limits are
@@ -99,6 +103,11 @@ class LoudnessConfig:
     enable_replaygain: bool = True
     enable_itunes_soundcheck: bool = True
     reference_loudness: float = -18.0
+    # When True, and every source FLAC in an album already carries
+    # REPLAYGAIN_TRACK_GAIN, those values are copied into the M4A
+    # instead of re-running r128gain. Big speed-up on pre-tagged
+    # libraries; off by default to preserve existing behaviour.
+    reuse_existing_replaygain: bool = False
 
     def __post_init__(self):
         if not REFERENCE_LUFS_MIN <= self.reference_loudness <= REFERENCE_LUFS_MAX:
@@ -135,6 +144,25 @@ class Config:
     processing: ProcessingConfig
 
 
+def _build_section(
+    section: str,
+    data: Dict[str, Any],
+    dataclass_cls: Type,
+) -> Any:
+    """Instantiate a config dataclass with typo-friendly diagnostics."""
+    known = {f.name for f in fields(dataclass_cls)}
+    unknown = sorted(set(data) - known)
+    if unknown:
+        raise ConfigError(
+            f"Unknown key(s) in [{section}]: {unknown}. "
+            f"Valid keys: {sorted(known)}"
+        )
+    try:
+        return dataclass_cls(**data)
+    except ValueError as e:
+        raise ConfigError(f"[{section}] {e}") from e
+
+
 def load_config(config_path: Path) -> Config:
     """Load and validate configuration from TOML file.
 
@@ -146,7 +174,7 @@ def load_config(config_path: Path) -> Config:
 
     Raises:
         FileNotFoundError: If config file doesn't exist
-        ValueError: If configuration is invalid
+        ConfigError: If configuration is invalid or contains unknown keys
     """
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
@@ -154,17 +182,29 @@ def load_config(config_path: Path) -> Config:
     with open(config_path, 'rb') as f:
         data = tomllib.load(f)
 
-    # Parse nested structures
-    cover_file_data = data.get('metadata', {}).get('cover_file', {})
-    cover_file = CoverFileConfig(**cover_file_data)
+    if 'paths' not in data:
+        raise ConfigError("Missing required section: [paths]")
 
-    metadata_data = {k: v for k, v in data.get('metadata', {}).items() if k != 'cover_file'}
-    metadata_data['cover_file'] = cover_file
+    cover_file_data = data.get('metadata', {}).get('cover_file', {})
+    cover_file = _build_section(
+        'metadata.cover_file', cover_file_data, CoverFileConfig
+    )
+
+    metadata_raw = {
+        k: v for k, v in data.get('metadata', {}).items() if k != 'cover_file'
+    }
+    metadata_raw['cover_file'] = cover_file
 
     return Config(
-        paths=PathsConfig(**data['paths']),
-        encoding=EncodingConfig(**data.get('encoding', {})),
-        metadata=MetadataConfig(**metadata_data),
-        loudness=LoudnessConfig(**data.get('loudness', {})),
-        processing=ProcessingConfig(**data.get('processing', {}))
+        paths=_build_section('paths', data['paths'], PathsConfig),
+        encoding=_build_section(
+            'encoding', data.get('encoding', {}), EncodingConfig
+        ),
+        metadata=_build_section('metadata', metadata_raw, MetadataConfig),
+        loudness=_build_section(
+            'loudness', data.get('loudness', {}), LoudnessConfig
+        ),
+        processing=_build_section(
+            'processing', data.get('processing', {}), ProcessingConfig
+        ),
     )
