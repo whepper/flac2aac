@@ -19,6 +19,18 @@ else:
         )
 
 
+# Validation bounds. Kept as module-level constants so the limits are
+# discoverable and adjustable in one place.
+VBR_QUALITY_MIN = 1
+VBR_QUALITY_MAX = 5
+JPEG_QUALITY_MIN = 1
+JPEG_QUALITY_MAX = 95
+REFERENCE_LUFS_MIN = -30.0
+REFERENCE_LUFS_MAX = 0.0
+VALID_OUTPUT_FORMATS = ("m4a", "mp4")
+VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+
+
 @dataclass
 class PathsConfig:
     """Path configuration."""
@@ -42,10 +54,14 @@ class EncodingConfig:
     encode_timeout: int = 1800
 
     def __post_init__(self):
-        if not 1 <= self.vbr_quality <= 5:
-            raise ValueError("vbr_quality must be between 1 and 5")
-        if self.output_format not in ["m4a", "mp4"]:
-            raise ValueError("output_format must be 'm4a' or 'mp4'")
+        if not VBR_QUALITY_MIN <= self.vbr_quality <= VBR_QUALITY_MAX:
+            raise ValueError(
+                f"vbr_quality must be between {VBR_QUALITY_MIN} and {VBR_QUALITY_MAX}"
+            )
+        if self.output_format not in VALID_OUTPUT_FORMATS:
+            raise ValueError(
+                f"output_format must be one of {VALID_OUTPUT_FORMATS}"
+            )
         if self.encode_timeout <= 0:
             raise ValueError("encode_timeout must be > 0 (seconds)")
 
@@ -64,8 +80,10 @@ class CoverFileConfig:
     def __post_init__(self):
         if self.max_size < 0:
             raise ValueError("max_size must be >= 0")
-        if not 1 <= self.jpeg_quality <= 95:
-            raise ValueError("jpeg_quality must be between 1 and 95")
+        if not JPEG_QUALITY_MIN <= self.jpeg_quality <= JPEG_QUALITY_MAX:
+            raise ValueError(
+                f"jpeg_quality must be between {JPEG_QUALITY_MIN} and {JPEG_QUALITY_MAX}"
+            )
 
 
 @dataclass
@@ -83,8 +101,11 @@ class LoudnessConfig:
     reference_loudness: float = -18.0
 
     def __post_init__(self):
-        if not -30.0 <= self.reference_loudness <= 0.0:
-            raise ValueError("reference_loudness must be between -30.0 and 0.0 LUFS")
+        if not REFERENCE_LUFS_MIN <= self.reference_loudness <= REFERENCE_LUFS_MAX:
+            raise ValueError(
+                f"reference_loudness must be between {REFERENCE_LUFS_MIN} "
+                f"and {REFERENCE_LUFS_MAX} LUFS"
+            )
 
 
 @dataclass
@@ -97,8 +118,10 @@ class ProcessingConfig:
     def __post_init__(self):
         if self.workers < 1:
             raise ValueError("workers must be >= 1")
-        if self.log_level.upper() not in ["DEBUG", "INFO", "WARNING", "ERROR"]:
-            raise ValueError("log_level must be DEBUG, INFO, WARNING, or ERROR")
+        if self.log_level.upper() not in VALID_LOG_LEVELS:
+            raise ValueError(
+                f"log_level must be one of {VALID_LOG_LEVELS}"
+            )
         self.log_level = self.log_level.upper()
 
 

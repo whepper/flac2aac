@@ -85,14 +85,3 @@ class Scanner:
         
         # Construct full output path
         return self.output_dir / output_relative
-    
-    def get_album_dir(self, file_path: Path) -> Path:
-        """Get the album directory for a given file.
-        
-        Args:
-            file_path: Path to audio file
-            
-        Returns:
-            Parent directory (album folder)
-        """
-        return file_path.parent

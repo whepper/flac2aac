@@ -28,22 +28,24 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 
-# Vorbis Comment to MP4 atom mapping
-TAG_MAPPING = {
-    'title': '©nam',
-    'artist': '©ART',
-    'albumartist': 'aART',
-    'album': '©alb',
-    'date': '©day',
-    'year': '©day',
-    'tracknumber': 'trkn',
-    'discnumber': 'disk',
-    'genre': '©gen',
-    'comment': '©cmt',
-    'composer': '©wrt',
-    'lyrics': '©lyr',
-    'copyright': 'cprt',
-}
+# Vorbis Comment → MP4 atom mapping. Ordered list of (vorbis_key, mp4_atom)
+# pairs. When multiple vorbis keys map to the same atom, the first one with
+# a non-empty value wins — that's why ``date`` precedes ``year``.
+TAG_MAPPING = [
+    ('title', '©nam'),
+    ('artist', '©ART'),
+    ('albumartist', 'aART'),
+    ('album', '©alb'),
+    ('date', '©day'),
+    ('year', '©day'),
+    ('tracknumber', 'trkn'),
+    ('discnumber', 'disk'),
+    ('genre', '©gen'),
+    ('comment', '©cmt'),
+    ('composer', '©wrt'),
+    ('lyrics', '©lyr'),
+    ('copyright', 'cprt'),
+]
 
 
 class MetadataHandler:
@@ -65,51 +67,50 @@ class MetadataHandler:
             destination: Destination M4A file
         """
         try:
-            # Read FLAC tags
             flac = FLAC(source)
-            
-            # Open M4A for writing
             m4a = MP4(destination)
-            
-            # Copy text tags
+
             self._copy_text_tags(flac, m4a)
-            
-            # Copy cover art if enabled
             if self.config.metadata.copy_artwork:
                 self._copy_cover_art(flac, m4a)
-            
+
             m4a.save()
             logger.debug(f"Copied metadata: {source.name} -> {destination.name}")
-            
-        except Exception as e:
+
+        except (MutagenError, OSError) as e:
             logger.error(f"Failed to copy metadata from {source.name}: {e}")
             raise
     
     def _copy_text_tags(self, flac: FLAC, m4a: MP4) -> None:
         """Copy text tags from FLAC to M4A.
-        
+
         Args:
             flac: Source FLAC object
             m4a: Destination MP4 object
         """
-        for vorbis_key, mp4_key in TAG_MAPPING.items():
+        written: set = set()
+        for vorbis_key, mp4_key in TAG_MAPPING:
+            if mp4_key in written:
+                # An earlier mapping already populated this atom (e.g.
+                # ``date`` before ``year``). Don't clobber it.
+                continue
             values = flac.get(vorbis_key, [])
             if not values:
                 continue
-            
-            # Handle track/disc numbers specially (tuple format)
-            if vorbis_key in ['tracknumber', 'discnumber']:
+
+            if vorbis_key in ('tracknumber', 'discnumber'):
                 try:
-                    # Parse "track/total" or just "track"
                     parts = str(values[0]).split('/')
                     track_num = int(parts[0])
                     total = int(parts[1]) if len(parts) > 1 else 0
                     m4a[mp4_key] = [(track_num, total)]
                 except (ValueError, IndexError):
                     logger.warning(f"Invalid {vorbis_key} format: {values[0]}")
+                    continue
             else:
-                # Standard text tags
                 m4a[mp4_key] = [str(v) for v in values]
+
+            written.add(mp4_key)
     
     def _copy_cover_art(self, flac: FLAC, m4a: MP4) -> None:
         """Copy embedded cover art from FLAC to M4A.
@@ -276,29 +277,26 @@ class CoverManager:
         """
         try:
             with Image.open(source) as img:
-                # Convert RGBA to RGB if needed
+                # Flatten transparency onto white before JPEG conversion.
                 if img.mode in ('RGBA', 'LA', 'P'):
-                    background = Image.new('RGB', img.size, (255, 255, 255))
-                    if img.mode == 'P':
-                        img = img.convert('RGBA')
-                    background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+                    rgba = img.convert('RGBA')
+                    background = Image.new('RGB', rgba.size, (255, 255, 255))
+                    background.paste(rgba, mask=rgba.split()[3])
                     img = background
-                
-                # Resize if needed
+
                 if self.cover_config.max_size > 0:
                     img.thumbnail(
                         (self.cover_config.max_size, self.cover_config.max_size),
                         Image.Resampling.LANCZOS
                     )
-                
-                # Save as JPEG
+
                 img.save(
                     dest,
                     'JPEG',
                     quality=self.cover_config.jpeg_quality,
                     optimize=True
                 )
-        
-        except Exception as e:
+
+        except (OSError, ValueError) as e:
             logger.warning(f"Failed to process image, copying as-is: {e}")
             shutil.copy2(source, dest)
