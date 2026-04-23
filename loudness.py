@@ -6,10 +6,11 @@ Handles ReplayGain 2.0 (EBU R128) and iTunes SoundCheck tag generation.
 import logging
 import math
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Iterable, Optional, Tuple
 
 try:
     from mutagen import MutagenError
+    from mutagen.flac import FLAC
     from mutagen.mp4 import MP4, MP4FreeForm
 except ImportError:
     raise ImportError(
@@ -43,25 +44,33 @@ class LoudnessProcessor:
         self.loudness_config = config.loudness
         self.reference = self.loudness_config.reference_loudness
     
-    def process_album(self, m4a_files: List[Path]) -> None:
+    def process_album(
+        self,
+        m4a_files: List[Path],
+        source_pairs: Optional[List[Tuple[Path, Path]]] = None,
+    ) -> None:
         """Process loudness for an album.
-        
+
         Args:
-            m4a_files: List of M4A files in the album
+            m4a_files: List of M4A files in the album.
+            source_pairs: Optional list of (source_flac, dest_m4a) pairs
+                used for the reuse_existing_replaygain fast path.
         """
         if not m4a_files:
             return
-        
+
         logger.info(f"Processing loudness for {len(m4a_files)} track(s)")
-        
-        # Calculate ReplayGain if enabled
+
         if self.loudness_config.enable_replaygain:
-            if r128gain is None:
-                logger.warning("r128gain not available, skipping ReplayGain")
-            else:
-                self._add_replaygain_tags(m4a_files)
-        
-        # Add iTunes SoundCheck if enabled
+            reused = False
+            if self.loudness_config.reuse_existing_replaygain and source_pairs:
+                reused = self._reuse_source_replaygain(source_pairs)
+            if not reused:
+                if r128gain is None:
+                    logger.warning("r128gain not available, skipping ReplayGain")
+                else:
+                    self._add_replaygain_tags(m4a_files)
+
         if self.loudness_config.enable_itunes_soundcheck:
             self._add_itunes_soundcheck(m4a_files)
     
@@ -110,6 +119,67 @@ class LoudnessProcessor:
             )
         else:
             logger.info(f"Added ReplayGain tags to {len(m4a_files)} file(s)")
+
+    # Vorbis keys carrying existing ReplayGain data on a source FLAC,
+    # mapped to the MP4 freeform atom we write on the destination.
+    _SOURCE_REPLAYGAIN_ATOMS = {
+        'replaygain_track_gain': '----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN',
+        'replaygain_track_peak': '----:com.apple.iTunes:REPLAYGAIN_TRACK_PEAK',
+        'replaygain_album_gain': '----:com.apple.iTunes:REPLAYGAIN_ALBUM_GAIN',
+        'replaygain_album_peak': '----:com.apple.iTunes:REPLAYGAIN_ALBUM_PEAK',
+    }
+
+    def _reuse_source_replaygain(
+        self, pairs: Iterable[Tuple[Path, Path]]
+    ) -> bool:
+        """Copy pre-computed ReplayGain tags from each source FLAC.
+
+        Runs only when every source carries at least a
+        ``replaygain_track_gain`` value — partial coverage falls back
+        to a full r128 pass for predictability.
+
+        Returns:
+            True when RG tags were reused for the whole album, False
+            when the caller should fall back to r128gain.
+        """
+        pair_list = list(pairs)
+        extracted: List[Tuple[Path, Dict[str, str]]] = []
+        for source, dest in pair_list:
+            try:
+                flac = FLAC(source)
+            except (MutagenError, OSError) as e:
+                logger.debug(
+                    f"Cannot reuse RG, failed to read {source.name}: {e}"
+                )
+                return False
+            if 'replaygain_track_gain' not in flac:
+                logger.debug(
+                    f"Cannot reuse RG, {source.name} has no replaygain_track_gain"
+                )
+                return False
+            tags: Dict[str, str] = {}
+            for vorbis_key, atom in self._SOURCE_REPLAYGAIN_ATOMS.items():
+                values = flac.get(vorbis_key)
+                if values:
+                    tags[atom] = str(values[0])
+            extracted.append((dest, tags))
+
+        for dest, tags in extracted:
+            try:
+                m4a = MP4(dest)
+                for atom, value in tags.items():
+                    m4a[atom] = [MP4FreeForm(value.encode('utf-8'))]
+                m4a.save()
+            except (MutagenError, OSError) as e:
+                logger.error(
+                    f"Failed to copy ReplayGain tags to {dest.name}: {e}"
+                )
+                return False
+
+        logger.info(
+            f"Reused existing ReplayGain tags for {len(extracted)} track(s)"
+        )
+        return True
 
     def _has_replaygain(self, m4a_file: Path) -> bool:
         """Return True if the M4A file has a ReplayGain track-gain tag."""
@@ -196,42 +266,30 @@ class LoudnessProcessor:
             return None
     
     def _replaygain_to_soundcheck(self, gain_db: float) -> str:
-        """Convert ReplayGain dB to iTunes SoundCheck hex format.
-        
-        Based on the algorithm from:
-        https://gist.github.com/daveisadork/4717535
-        
+        """Convert ReplayGain dB to iTunes SoundCheck (iTunNORM) format.
+
+        The string format expected by iTunes/Music.app:
+        a leading space, then ten uppercase 8-character hex values
+        separated by single spaces. Slots 1-2 encode the gain
+        relative to a 1/1000 W reference, slots 3-4 relative to a
+        2.5e-7 W reference (× 2500), and slots 5-10 carry
+        standard filler values that iTunes itself writes. The
+        per-slot field is 32-bit, so values clamp at 0xFFFFFFFE.
+
+        This matches what Mp3tag and foobar2000 produce when
+        converting ReplayGain → iTunNORM.
+
         Args:
-            gain_db: ReplayGain gain in dB
-            
+            gain_db: ReplayGain gain in dB.
+
         Returns:
-            iTunNORM hex string
+            iTunNORM hex string (with leading space).
         """
-        # Convert dB to linear scale (inverse of 10^(gain/10))
-        # SoundCheck uses milliwatt reference
-        linear_gain = 10 ** (-gain_db / 10.0)
-        
-        # Scale to SoundCheck range and clamp
-        sc_value = int(round(linear_gain * 1000))
-        sc_value = min(sc_value, 65534)  # Max value
-        
-        # Format as 8-character hex (padded with spaces)
-        hex_value = f"{sc_value:08X}"
-        
-        # iTunNORM format: 10 hex values (5 stereo pairs)
-        # Format: [left] [right] [?] [?] [?] [?] [?] [?] [left] [right]
-        # We use the same value for left and right channels
-        itunnorm_parts = [
-            hex_value,  # Left
-            hex_value,  # Right
-            "00000000",  # Unknown/reserved
-            "00000000",
-            "00000000",
-            "00000000",
-            "00000000",
-            "00000000",
-            hex_value,  # Left (repeated)
-            hex_value   # Right (repeated)
-        ]
-        
-        return ' '.join(itunnorm_parts)
+        ratio = 10 ** (-gain_db / 10.0)
+        sc_1000 = max(0, min(int(round(ratio * 1000)), 0xFFFFFFFE))
+        sc_2500 = max(0, min(int(round(ratio * 2500)), 0xFFFFFFFE))
+        return (
+            f" {sc_1000:08X} {sc_1000:08X}"
+            f" {sc_2500:08X} {sc_2500:08X}"
+            f" 00024CA8 00024CA8 00007FFF 00007FFF 00024CA8 00024CA8"
+        )

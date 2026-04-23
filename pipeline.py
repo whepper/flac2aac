@@ -32,6 +32,7 @@ class ProcessingStats:
     failed: int = 0
     skipped: int = 0
     albums_processed: int = 0
+    albums_failed: int = 0
 
 
 class Pipeline:
@@ -99,10 +100,18 @@ class Pipeline:
         album_groups = self._group_by_album(file_pairs)
         logger.info(f"Organised into {len(album_groups)} album(s)")
 
-        # Process each album
+        # Process each album. One album failing shouldn't take down
+        # the whole library pass — log the error, count it, and move
+        # on. The per-album cleanup inside _process_album already
+        # takes care of work_dir state.
         for album_dir, files in album_groups.items():
             logger.info(f"\nProcessing album: {album_dir}")
-            self._process_album(files)
+            try:
+                self._process_album(files)
+            except Exception as exc:
+                logger.error(f"  Album failed, continuing: {album_dir}: {exc}")
+                self.stats.albums_failed += 1
+                continue
             self.stats.albums_processed += 1
 
         return self.stats
@@ -146,13 +155,15 @@ class Pipeline:
         try:
             # Phase 1 & 2: Encode + copy metadata (parallel)
             logger.info(f"  Encoding {len(file_pairs)} track(s)...")
-            work_dest_files = self._encode_album(
+            encoded_pairs = self._encode_album(
                 file_pairs, source_album_dir, work_album_dir
             )
 
-            if not work_dest_files:
+            if not encoded_pairs:
                 logger.warning("  No files successfully encoded in this album")
                 return
+
+            work_dest_files = [dest for _, dest in encoded_pairs]
 
             # Phase 3: Cover art
             logger.info("  Processing cover art...")
@@ -160,7 +171,9 @@ class Pipeline:
 
             # Phase 4 & 5: Loudness analysis + iTunNORM
             logger.info("  Analysing loudness and adding tags...")
-            self.loudness_processor.process_album(work_dest_files)
+            self.loudness_processor.process_album(
+                work_dest_files, source_pairs=encoded_pairs
+            )
 
             # Phase 6: Move finished album to output_dir
             if self.use_work_dir:
@@ -179,19 +192,21 @@ class Pipeline:
         file_pairs: List[Tuple[Path, Path]],
         source_album_dir: Path,
         work_album_dir: Path,
-    ) -> List[Path]:
+    ) -> List[Tuple[Path, Path]]:
         """Encode all tracks for one album into work_album_dir.
 
-        Returns list of successfully encoded destination paths.
+        Returns the subset of ``(source, work_dest)`` pairs that were
+        successfully encoded — the source paths are kept alongside so
+        downstream stages (cover art, RG reuse) can look up metadata
+        on the original FLAC without re-deriving it.
         """
-        # Remap destination paths to work directory
         work_file_pairs: List[Tuple[Path, Path]] = []
         for source, final_dest in file_pairs:
             relative = source.with_suffix(f".{self.config.encoding.output_format}").name
             work_dest = work_album_dir / relative
             work_file_pairs.append((source, work_dest))
 
-        work_dest_files: List[Path] = []
+        encoded_pairs: List[Tuple[Path, Path]] = []
 
         with ThreadPoolExecutor(max_workers=self.config.processing.workers) as executor:
             futures = {
@@ -202,7 +217,7 @@ class Pipeline:
                 src, dst = futures[future]
                 try:
                     if future.result():
-                        work_dest_files.append(dst)
+                        encoded_pairs.append((src, dst))
                         self.stats.successful += 1
                     else:
                         self.stats.failed += 1
@@ -210,7 +225,7 @@ class Pipeline:
                     logger.error(f"  Unexpected error processing {src.name}: {exc}")
                     self.stats.failed += 1
 
-        return work_dest_files
+        return encoded_pairs
 
     def _encode_file(self, source: Path, dest: Path) -> bool:
         """Encode a single file and copy its metadata.
