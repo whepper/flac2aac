@@ -162,3 +162,118 @@ def test_invalid_tracknumber_is_skipped_not_raised(handler, tmp_path, caplog):
     m4a = _FakeM4A()
     handler._copy_text_tags(FLAC(flac_path), m4a)
     assert "trkn" not in m4a
+
+
+# --------------------------------------------------------------------
+# Extra tag pass-through: BPM, compilation, grouping, MB IDs, ISRC, ...
+# --------------------------------------------------------------------
+
+def test_bpm_copied_as_integer(handler, tmp_path):
+    flac_path = tmp_path / "sample.flac"
+    _write_empty_flac(flac_path)
+    flac = FLAC(flac_path)
+    flac["bpm"] = ["128"]
+    flac.save()
+
+    m4a = _FakeM4A()
+    handler._copy_text_tags(FLAC(flac_path), m4a)
+    assert m4a["tmpo"] == [128]
+
+
+def test_bpm_accepts_float_string(handler, tmp_path):
+    flac_path = tmp_path / "sample.flac"
+    _write_empty_flac(flac_path)
+    flac = FLAC(flac_path)
+    flac["bpm"] = ["128.5"]
+    flac.save()
+
+    m4a = _FakeM4A()
+    handler._copy_text_tags(FLAC(flac_path), m4a)
+    assert m4a["tmpo"] == [128]
+
+
+def test_bpm_invalid_is_skipped(handler, tmp_path, caplog):
+    flac_path = tmp_path / "sample.flac"
+    _write_empty_flac(flac_path)
+    flac = FLAC(flac_path)
+    flac["bpm"] = ["not-a-number"]
+    flac.save()
+
+    m4a = _FakeM4A()
+    handler._copy_text_tags(FLAC(flac_path), m4a)
+    assert "tmpo" not in m4a
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("1", True), ("true", True), ("TRUE", True),
+        ("yes", True), ("on", True),
+        ("0", False), ("false", False), ("no", False), ("", False),
+    ],
+)
+def test_compilation_parses_truthy_forms(handler, tmp_path, raw, expected):
+    flac_path = tmp_path / "sample.flac"
+    _write_empty_flac(flac_path)
+    flac = FLAC(flac_path)
+    flac["compilation"] = [raw]
+    flac.save()
+
+    m4a = _FakeM4A()
+    handler._copy_text_tags(FLAC(flac_path), m4a)
+    assert m4a["cpil"] is expected
+
+
+def test_grouping_copied_as_text(handler, tmp_path):
+    flac_path = tmp_path / "sample.flac"
+    _write_empty_flac(flac_path)
+    flac = FLAC(flac_path)
+    flac["grouping"] = ["Live Recordings"]
+    flac.save()
+
+    m4a = _FakeM4A()
+    handler._copy_text_tags(FLAC(flac_path), m4a)
+    assert m4a["©grp"] == ["Live Recordings"]
+
+
+def test_musicbrainz_and_isrc_copied_as_freeform(handler, tmp_path):
+    from mutagen.mp4 import MP4FreeForm
+
+    flac_path = tmp_path / "sample.flac"
+    _write_empty_flac(flac_path)
+    flac = FLAC(flac_path)
+    flac["musicbrainz_trackid"] = ["abc-123"]
+    flac["musicbrainz_albumid"] = ["def-456"]
+    flac["isrc"] = ["USRC17607839"]
+    flac["label"] = ["Acme Records"]
+    flac["catalognumber"] = ["ACME-001"]
+    flac.save()
+
+    m4a = _FakeM4A()
+    handler._copy_text_tags(FLAC(flac_path), m4a)
+    for atom, expected in [
+        ('----:com.apple.iTunes:MusicBrainz Track Id', 'abc-123'),
+        ('----:com.apple.iTunes:MusicBrainz Album Id', 'def-456'),
+        ('----:com.apple.iTunes:ISRC', 'USRC17607839'),
+        ('----:com.apple.iTunes:LABEL', 'Acme Records'),
+        ('----:com.apple.iTunes:CATALOGNUMBER', 'ACME-001'),
+    ]:
+        stored = m4a[atom]
+        assert len(stored) == 1
+        assert isinstance(stored[0], MP4FreeForm)
+        assert bytes(stored[0]).decode('utf-8') == expected
+
+
+def test_missing_extra_tags_leave_atoms_absent(handler, tmp_path):
+    """No BPM/compilation/MB tags in source → no atoms in dest."""
+    flac_path = tmp_path / "sample.flac"
+    _write_empty_flac(flac_path)
+
+    m4a = _FakeM4A()
+    handler._copy_text_tags(FLAC(flac_path), m4a)
+    for atom in [
+        'tmpo', 'cpil', '©grp',
+        '----:com.apple.iTunes:MusicBrainz Track Id',
+        '----:com.apple.iTunes:ISRC',
+    ]:
+        assert atom not in m4a

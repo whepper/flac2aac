@@ -9,8 +9,14 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Optional, Sequence
 
-from config import ConfigError, load_config
+from config import (
+    VALID_LOG_LEVELS,
+    Config,
+    ConfigError,
+    load_config,
+)
 from pipeline import Pipeline
 
 
@@ -20,6 +26,12 @@ EXIT_OK = 0
 EXIT_RUNTIME = 1       # some files/albums failed, ffmpeg missing, etc.
 EXIT_CONFIG = 2        # config not found, malformed, or invalid
 EXIT_SIGINT = 130      # Ctrl+C
+
+
+# Kept in sync with the top-level __init__.py ``__version__``; duplicated
+# so ``python main.py --version`` works without treating this directory
+# as an importable package.
+__version__ = "1.0.0"
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -37,28 +49,84 @@ def setup_logging(level: str = "INFO") -> None:
     )
 
 
-def main() -> int:
-    """Main entry point.
-
-    Returns:
-        Exit code (0 for success, non-zero for error)
-    """
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argparse parser. Split out for testability."""
     parser = argparse.ArgumentParser(
+        prog='flac2aac',
         description='Convert FLAC files to AAC with metadata and loudness tagging'
     )
     parser.add_argument(
         '--config',
         type=Path,
         default=Path('config.toml'),
-        help='Path to configuration file (default: config.toml)'
+        help='Path to configuration file (default: config.toml)',
     )
     parser.add_argument(
         '--dry-run',
         action='store_true',
-        help='Show what would be processed without encoding'
+        help='Show what would be processed without encoding',
     )
+    parser.add_argument(
+        '--input',
+        type=Path,
+        metavar='DIR',
+        help='Override [paths] input_dir from the config file',
+    )
+    parser.add_argument(
+        '--output',
+        type=Path,
+        metavar='DIR',
+        help='Override [paths] output_dir from the config file',
+    )
+    parser.add_argument(
+        '--workers',
+        type=int,
+        metavar='N',
+        help='Override [processing] workers from the config file',
+    )
+    parser.add_argument(
+        '--log-level',
+        choices=list(VALID_LOG_LEVELS),
+        help='Override [processing] log_level from the config file',
+    )
+    parser.add_argument(
+        '--version',
+        action='version',
+        version=f'flac2aac {__version__}',
+    )
+    return parser
 
-    args = parser.parse_args()
+
+def apply_cli_overrides(config: Config, args: argparse.Namespace) -> None:
+    """Apply `--input`, `--output`, `--workers`, `--log-level` on top
+    of a loaded Config. Raises ConfigError with a section-tagged
+    message for bad values (e.g. ``--workers 0``).
+    """
+    if args.input is not None:
+        config.paths.input_dir = Path(args.input).expanduser().resolve()
+    if args.output is not None:
+        config.paths.output_dir = Path(args.output).expanduser().resolve()
+    if args.workers is not None:
+        if args.workers < 1:
+            raise ConfigError("[processing] workers must be >= 1")
+        config.processing.workers = args.workers
+    if args.log_level is not None:
+        # argparse already constrains this to VALID_LOG_LEVELS, but
+        # keep the normalisation consistent with ProcessingConfig.
+        config.processing.log_level = args.log_level.upper()
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Main entry point.
+
+    Args:
+        argv: Optional argument list (defaults to ``sys.argv[1:]``).
+
+    Returns:
+        Exit code (see module-level EXIT_* constants).
+    """
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
     # Initial logging at INFO so config-load errors are visible; level
     # is refined once the configuration is parsed.
@@ -77,19 +145,23 @@ def main() -> int:
         logger.error(f"Error loading configuration: {e}")
         return EXIT_CONFIG
 
+    try:
+        apply_cli_overrides(config, args)
+    except ConfigError as e:
+        logger.error(f"Invalid override: {e}")
+        return EXIT_CONFIG
+
     setup_logging(config.processing.log_level)
 
     logger.info("FLAC to AAC Converter starting")
     logger.info(f"Input: {config.paths.input_dir}")
     logger.info(f"Output: {config.paths.output_dir}")
     logger.info(f"Workers: {config.processing.workers}")
-    
-    # Run pipeline
+
     try:
         pipeline = Pipeline(config, dry_run=args.dry_run)
         stats = pipeline.run()
-        
-        # Print summary
+
         logger.info("\n" + "="*60)
         logger.info("Conversion Summary")
         logger.info("="*60)
@@ -103,7 +175,7 @@ def main() -> int:
 
         ran_clean = stats.failed == 0 and stats.albums_failed == 0
         return EXIT_OK if ran_clean else EXIT_RUNTIME
-        
+
     except KeyboardInterrupt:
         logger.warning("\nOperation cancelled by user")
         return EXIT_SIGINT

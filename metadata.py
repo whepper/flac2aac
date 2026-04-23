@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any
 try:
     from mutagen import MutagenError
     from mutagen.flac import FLAC, Picture
-    from mutagen.mp4 import MP4, MP4Cover
+    from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 except ImportError:
     raise ImportError(
         "mutagen package required. Install with: pip install mutagen"
@@ -45,7 +45,36 @@ TAG_MAPPING = [
     ('composer', '©wrt'),
     ('lyrics', '©lyr'),
     ('copyright', 'cprt'),
+    ('grouping', '©grp'),
 ]
+
+# Integer atoms — mutagen expects ``list[int]`` here, not strings.
+TAG_INTEGER_MAPPING = [
+    ('bpm', 'tmpo'),
+]
+
+# Boolean atom. Any of 1/true/yes/on (case-insensitive) enables it.
+TAG_BOOL_MAPPING = [
+    ('compilation', 'cpil'),
+]
+
+# Freeform iTunes atoms (stored as UTF-8 bytes under the
+# ``----:com.apple.iTunes:<name>`` namespace). The string on the
+# right-hand side is the <name> suffix.
+TAG_FREEFORM_MAPPING = [
+    ('musicbrainz_trackid', 'MusicBrainz Track Id'),
+    ('musicbrainz_releasetrackid', 'MusicBrainz Release Track Id'),
+    ('musicbrainz_artistid', 'MusicBrainz Artist Id'),
+    ('musicbrainz_albumid', 'MusicBrainz Album Id'),
+    ('musicbrainz_albumartistid', 'MusicBrainz Album Artist Id'),
+    ('musicbrainz_releasegroupid', 'MusicBrainz Release Group Id'),
+    ('isrc', 'ISRC'),
+    ('label', 'LABEL'),
+    ('catalognumber', 'CATALOGNUMBER'),
+    ('barcode', 'BARCODE'),
+]
+
+_TRUTHY = {'1', 'true', 'yes', 'on'}
 
 
 class MetadataHandler:
@@ -90,16 +119,22 @@ class MetadataHandler:
     }
 
     def _copy_text_tags(self, flac: FLAC, m4a: MP4) -> None:
-        """Copy text tags from FLAC to M4A.
+        """Copy tags from FLAC to M4A.
 
-        Args:
-            flac: Source FLAC object
-            m4a: Destination MP4 object
+        Handles the four flavours of MP4 atom we care about:
+
+        * plain text atoms (``TAG_MAPPING``)
+        * track/disc number tuples (parsed specially)
+        * integer atoms (``TAG_INTEGER_MAPPING`` — e.g. BPM)
+        * boolean atom (``TAG_BOOL_MAPPING`` — compilation)
+        * iTunes freeform atoms (``TAG_FREEFORM_MAPPING`` —
+          MusicBrainz IDs, ISRC, label, catalog, barcode, ...)
         """
         written: set = set()
+
         for vorbis_key, mp4_key in TAG_MAPPING:
             if mp4_key in written:
-                # An earlier mapping already populated this atom (e.g.
+                # Earlier mapping already populated this atom (e.g.
                 # ``date`` before ``year``). Don't clobber it.
                 continue
             values = flac.get(vorbis_key, [])
@@ -124,6 +159,30 @@ class MetadataHandler:
                 m4a[mp4_key] = [str(v) for v in values]
 
             written.add(mp4_key)
+
+        for vorbis_key, mp4_key in TAG_INTEGER_MAPPING:
+            values = flac.get(vorbis_key, [])
+            if not values:
+                continue
+            try:
+                m4a[mp4_key] = [int(float(str(values[0])))]
+            except ValueError:
+                logger.warning(f"Invalid {vorbis_key} format: {values[0]}")
+
+        for vorbis_key, mp4_key in TAG_BOOL_MAPPING:
+            values = flac.get(vorbis_key, [])
+            if not values:
+                continue
+            m4a[mp4_key] = str(values[0]).strip().lower() in _TRUTHY
+
+        for vorbis_key, atom_name in TAG_FREEFORM_MAPPING:
+            values = flac.get(vorbis_key, [])
+            if not values:
+                continue
+            atom = f'----:com.apple.iTunes:{atom_name}'
+            m4a[atom] = [
+                MP4FreeForm(str(v).encode('utf-8')) for v in values
+            ]
 
     @staticmethod
     def _lookup_total(flac: FLAC, keys: tuple) -> int:
