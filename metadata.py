@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 try:
+    from mutagen import MutagenError
     from mutagen.flac import FLAC, Picture
     from mutagen.mp4 import MP4, MP4Cover
 except ImportError:
@@ -159,23 +160,30 @@ class CoverManager:
     
     def handle_cover_file(self, source_album_dir: Path, dest_album_dir: Path) -> None:
         """Handle standalone cover file for an album.
-        
+
         Args:
             source_album_dir: Source album directory
             dest_album_dir: Destination album directory
         """
         if not self.cover_config.enabled:
             return
-        
+
         # Search for existing cover file
         cover_source = self._find_cover_file(source_album_dir)
-        
-        if not cover_source:
-            # Extract from first FLAC file as fallback
-            cover_source = self._extract_cover_from_flac(source_album_dir)
-        
+
         if cover_source:
             self._copy_cover_file(cover_source, dest_album_dir)
+            return
+
+        # Fallback: extract embedded art from the first FLAC and write it
+        # directly to the destination album directory. We never touch the
+        # source tree.
+        dest_album_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = dest_album_dir / self.cover_config.fallback_name
+        if dest_path.exists() and not self.config.processing.overwrite_existing:
+            logger.debug(f"Cover file already exists: {dest_path.name}")
+            return
+        self._extract_cover_from_flac(source_album_dir, dest_path)
     
     def _find_cover_file(self, directory: Path) -> Optional[Path]:
         """Search for cover file in directory.
@@ -194,49 +202,47 @@ class CoverManager:
         
         return None
     
-    def _extract_cover_from_flac(self, directory: Path) -> Optional[Path]:
-        """Extract cover from first FLAC file in directory.
-        
+    def _extract_cover_from_flac(
+        self, source_dir: Path, dest_path: Path
+    ) -> Optional[Path]:
+        """Extract embedded cover from first FLAC in source_dir into dest_path.
+
+        The source directory is only read; the cover is written to dest_path.
+
         Args:
-            directory: Directory containing FLAC files
-            
+            source_dir: Directory containing FLAC files (read-only)
+            dest_path: Destination file path for the extracted cover
+
         Returns:
-            Path to extracted cover file
+            dest_path on success, None on failure or if no cover is embedded.
         """
-        flac_files = list(directory.glob("*.flac")) + list(directory.glob("*.FLAC"))
-        
+        flac_files = [
+            p for p in source_dir.iterdir()
+            if p.is_file() and p.suffix.lower() == ".flac"
+        ]
         if not flac_files:
             return None
-        
+
         try:
             flac = FLAC(flac_files[0])
-            
-            if not flac.pictures:
-                return None
-            
-            # Get front cover
-            cover = None
-            for pic in flac.pictures:
-                if pic.type == 3:
-                    cover = pic
-                    break
-            
-            if not cover and flac.pictures:
-                cover = flac.pictures[0]
-            
-            if cover:
-                # Save to temp file
-                temp_cover = directory / self.cover_config.fallback_name
-                with open(temp_cover, 'wb') as f:
-                    f.write(cover.data)
-                
-                logger.debug(f"Extracted cover from {flac_files[0].name}")
-                return temp_cover
-        
-        except Exception as e:
-            logger.warning(f"Failed to extract cover: {e}")
-        
-        return None
+        except MutagenError as e:
+            logger.warning(f"Failed to read FLAC for cover extraction: {e}")
+            return None
+
+        if not flac.pictures:
+            return None
+
+        cover = next((p for p in flac.pictures if p.type == 3), flac.pictures[0])
+
+        try:
+            with open(dest_path, 'wb') as f:
+                f.write(cover.data)
+        except OSError as e:
+            logger.warning(f"Failed to write extracted cover to {dest_path}: {e}")
+            return None
+
+        logger.debug(f"Extracted cover from {flac_files[0].name} -> {dest_path.name}")
+        return dest_path
     
     def _copy_cover_file(self, source: Path, dest_dir: Path) -> None:
         """Copy and optionally process cover file.

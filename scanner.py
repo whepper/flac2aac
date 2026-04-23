@@ -5,7 +5,7 @@ Scans input directory for FLAC files and generates output paths.
 
 import logging
 from pathlib import Path
-from typing import Iterator, Tuple
+from typing import Iterator, List, Set, Tuple
 
 from config import Config
 
@@ -41,10 +41,21 @@ class Scanner:
             return
         
         logger.info(f"Scanning for FLAC files in: {self.input_dir}")
-        
-        flac_files = list(self.input_dir.rglob("*.flac"))
-        flac_files.extend(self.input_dir.rglob("*.FLAC"))
-        
+
+        # Case-insensitive walk, deduplicated by resolved path so that
+        # case-insensitive filesystems (macOS default, Windows) don't
+        # yield the same file twice.
+        seen: Set[Path] = set()
+        flac_files: List[Path] = []
+        for path in self.input_dir.rglob("*"):
+            if not path.is_file() or path.suffix.lower() != ".flac":
+                continue
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            flac_files.append(path)
+
         logger.info(f"Found {len(flac_files)} FLAC file(s)")
         
         for source_path in flac_files:

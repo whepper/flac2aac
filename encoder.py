@@ -30,6 +30,7 @@ class Encoder:
         self.config = config
         self.ffmpeg_bin = config.paths.ffmpeg_bin
         self.vbr_quality = config.encoding.vbr_quality
+        self.encode_timeout = config.encoding.encode_timeout
     
     def encode(self, source: Path, destination: Path) -> None:
         """Encode FLAC file to AAC.
@@ -66,10 +67,22 @@ class Encoder:
                 cmd,
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=self.encode_timeout,
             )
             logger.info(f"Encoded: {source.name}")
-            
+
+        except subprocess.TimeoutExpired as e:
+            # Remove any partial output ffmpeg may have left behind.
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
+            error_msg = (
+                f"Encoding timed out after {self.encode_timeout}s: {source.name}"
+            )
+            logger.error(error_msg)
+            raise EncodingError(error_msg) from e
         except subprocess.CalledProcessError as e:
             error_msg = f"Failed to encode {source.name}: {e.stderr}"
             logger.error(error_msg)

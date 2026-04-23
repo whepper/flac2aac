@@ -64,23 +64,29 @@ class LoudnessProcessor:
         if self.loudness_config.enable_itunes_soundcheck:
             self._add_itunes_soundcheck(m4a_files)
     
+    # Possible locations r128gain (and earlier versions) may store ReplayGain
+    # track gain under. Used both for iTunNORM lookup and for post-processing
+    # verification that tags were actually written.
+    _REPLAYGAIN_KEYS = (
+        '----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN',
+        '----:com.apple.iTunes:replaygain_track_gain',
+        'REPLAYGAIN_TRACK_GAIN',
+        'replaygain_track_gain',
+    )
+
     def _add_replaygain_tags(self, m4a_files: List[Path]) -> None:
         """Add ReplayGain 2.0 tags using r128gain.
-        
+
         Note: r128gain uses a fixed reference of -18 LUFS (ReplayGain 2.0 standard).
         The target_loudness config option is only used for iTunNORM calculation.
-        
+
         Args:
             m4a_files: List of M4A files
         """
+        file_paths = [str(f) for f in m4a_files]
+        logger.debug(f"Running R128 analysis on {len(file_paths)} file(s)")
+
         try:
-            # Convert paths to strings
-            file_paths = [str(f) for f in m4a_files]
-            
-            # Run r128gain scan
-            logger.debug(f"Running R128 analysis on {len(file_paths)} file(s)")
-            
-            # Use r128gain as library
             # r128gain uses fixed -18 LUFS reference (ReplayGain 2.0 standard)
             # It does not accept target_loudness parameter
             r128gain.process(
@@ -89,11 +95,29 @@ class LoudnessProcessor:
                 skip_tagged=False,
                 opus_output_gain=False
             )
-            
-            logger.info(f"Added ReplayGain tags to {len(m4a_files)} file(s)")
-            
         except Exception as e:
             logger.error(f"Failed to add ReplayGain tags: {e}")
+            return
+
+        # r128gain swallows many errors internally and returns without raising,
+        # so verify tags were actually written by re-reading the files.
+        missing = [f for f in m4a_files if not self._has_replaygain(f)]
+        if missing:
+            logger.error(
+                f"ReplayGain tags missing on {len(missing)}/{len(m4a_files)} "
+                f"file(s) after r128gain run; first offender: {missing[0].name}"
+            )
+        else:
+            logger.info(f"Added ReplayGain tags to {len(m4a_files)} file(s)")
+
+    def _has_replaygain(self, m4a_file: Path) -> bool:
+        """Return True if the M4A file has a ReplayGain track-gain tag."""
+        try:
+            m4a = MP4(m4a_file)
+        except Exception as e:  # mutagen raises various subclasses of MutagenError
+            logger.warning(f"Could not read {m4a_file.name} to verify tags: {e}")
+            return False
+        return any(key in m4a for key in self._REPLAYGAIN_KEYS)
     
     def _add_itunes_soundcheck(self, m4a_files: List[Path]) -> None:
         """Add iTunes SoundCheck (iTunNORM) tags.
@@ -105,23 +129,11 @@ class LoudnessProcessor:
             try:
                 m4a = MP4(m4a_file)
                 
-                # DEBUG: Log all available keys
                 logger.debug(f"Available keys in {m4a_file.name}: {list(m4a.keys())}")
-                
-                # Try different possible key formats
-                possible_keys = [
-                    '----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN',
-                    '----:com.apple.iTunes:replaygain_track_gain',
-                    'REPLAYGAIN_TRACK_GAIN',
-                    'replaygain_track_gain'
-                ]
-                
+
                 rg_gain = None
-                found_key = None
-                
-                for key in possible_keys:
+                for key in self._REPLAYGAIN_KEYS:
                     if key in m4a:
-                        found_key = key
                         rg_gain = self._get_replaygain_value(m4a, key)
                         if rg_gain is not None:
                             logger.debug(f"Found ReplayGain at key '{key}': {rg_gain} dB")

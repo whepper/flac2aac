@@ -47,6 +47,10 @@ vbr_quality = 5
 # Options: "m4a" or "mp4" (both are MPEG-4 containers)
 output_format = "m4a"
 
+# Maximum seconds a single FFmpeg encode is allowed to run before
+# being killed. Guards against hangs on corrupt FLAC files.
+encode_timeout = 1800
+
 
 [metadata]
 # Copy embedded album artwork from FLAC to M4A files
