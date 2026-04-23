@@ -14,24 +14,24 @@ from config import load_config
 from pipeline import Pipeline
 
 
-def setup_logging(level: str) -> None:
+def setup_logging(level: str = "INFO") -> None:
     """Configure application logging.
-    
+
     Args:
         level: Log level string (DEBUG, INFO, WARNING, ERROR)
     """
     numeric_level = getattr(logging, level.upper(), logging.INFO)
-    
     logging.basicConfig(
         level=numeric_level,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        datefmt='%Y-%m-%d %H:%M:%S',
+        force=True,
     )
 
 
 def main() -> int:
     """Main entry point.
-    
+
     Returns:
         Exit code (0 for success, non-zero for error)
     """
@@ -49,24 +49,26 @@ def main() -> int:
         action='store_true',
         help='Show what would be processed without encoding'
     )
-    
+
     args = parser.parse_args()
-    
-    # Load configuration
+
+    # Initial logging at INFO so config-load errors are visible; level
+    # is refined once the configuration is parsed.
+    setup_logging("INFO")
+    logger = logging.getLogger(__name__)
+
     try:
         config = load_config(args.config)
     except FileNotFoundError:
-        print(f"Error: Configuration file '{args.config}' not found.", file=sys.stderr)
+        logger.error(f"Configuration file '{args.config}' not found.")
         return 1
     except Exception as e:
-        print(f"Error loading configuration: {e}", file=sys.stderr)
+        logger.error(f"Error loading configuration: {e}")
         return 1
-    
-    # Setup logging
+
     setup_logging(config.processing.log_level)
-    logger = logging.getLogger(__name__)
-    
-    logger.info(f"FLAC to AAC Converter starting")
+
+    logger.info("FLAC to AAC Converter starting")
     logger.info(f"Input: {config.paths.input_dir}")
     logger.info(f"Output: {config.paths.output_dir}")
     logger.info(f"Workers: {config.processing.workers}")

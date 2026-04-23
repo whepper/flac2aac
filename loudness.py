@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 try:
+    from mutagen import MutagenError
     from mutagen.mp4 import MP4, MP4FreeForm
 except ImportError:
     raise ImportError(
@@ -114,7 +115,7 @@ class LoudnessProcessor:
         """Return True if the M4A file has a ReplayGain track-gain tag."""
         try:
             m4a = MP4(m4a_file)
-        except Exception as e:  # mutagen raises various subclasses of MutagenError
+        except (MutagenError, OSError) as e:
             logger.warning(f"Could not read {m4a_file.name} to verify tags: {e}")
             return False
         return any(key in m4a for key in self._REPLAYGAIN_KEYS)
@@ -128,7 +129,7 @@ class LoudnessProcessor:
         for m4a_file in m4a_files:
             try:
                 m4a = MP4(m4a_file)
-                
+
                 logger.debug(f"Available keys in {m4a_file.name}: {list(m4a.keys())}")
 
                 rg_gain = None
@@ -138,24 +139,21 @@ class LoudnessProcessor:
                         if rg_gain is not None:
                             logger.debug(f"Found ReplayGain at key '{key}': {rg_gain} dB")
                             break
-                
-                if rg_gain is not None:
-                    # Convert to iTunNORM format
-                    itunnorm = self._replaygain_to_soundcheck(rg_gain)
-                    
-                    # Write iTunNORM tag as MP4FreeForm
-                    itunnorm_key = '----:com.apple.iTunes:iTunNORM'
-                    m4a[itunnorm_key] = [MP4FreeForm(itunnorm.encode('utf-8'))]
-                    m4a.save()
-                    
-                    logger.info(f"Added iTunNORM to {m4a_file.name} (gain: {rg_gain} dB)")
-                else:
+
+                if rg_gain is None:
                     logger.warning(
                         f"No ReplayGain data found for {m4a_file.name}, "
                         "skipping iTunNORM"
                     )
-            
-            except Exception as e:
+                    continue
+
+                itunnorm = self._replaygain_to_soundcheck(rg_gain)
+                itunnorm_key = '----:com.apple.iTunes:iTunNORM'
+                m4a[itunnorm_key] = [MP4FreeForm(itunnorm.encode('utf-8'))]
+                m4a.save()
+                logger.info(f"Added iTunNORM to {m4a_file.name} (gain: {rg_gain} dB)")
+
+            except (MutagenError, OSError) as e:
                 logger.error(f"Failed to add iTunNORM to {m4a_file.name}: {e}")
     
     def _get_replaygain_value(self, m4a: MP4, key: str) -> Optional[float]:

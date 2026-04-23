@@ -4,6 +4,8 @@ Handles FLAC to AAC conversion at VBR quality 5.
 """
 
 import logging
+import re
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -60,7 +62,7 @@ class Encoder:
         ]
         
         logger.debug(f"Encoding: {source.name} -> {destination.name}")
-        logger.debug(f"Command: {' '.join(cmd)}")
+        logger.debug(f"Command: {shlex.join(cmd)}")
         
         try:
             result = subprocess.run(
@@ -94,28 +96,35 @@ class Encoder:
     
     def verify_ffmpeg(self) -> bool:
         """Verify FFmpeg is available with libfdk_aac support.
-        
+
+        Queries ``ffmpeg -encoders`` and matches ``libfdk_aac`` in the
+        encoder-name column so that an unrelated mention of the string
+        (e.g. in another encoder's description) cannot produce a false
+        positive.
+
         Returns:
-            True if FFmpeg with libfdk_aac is available
+            True if FFmpeg with libfdk_aac is available.
         """
         try:
             result = subprocess.run(
-                [self.ffmpeg_bin, '-codecs'],
+                [self.ffmpeg_bin, '-encoders'],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
             )
-            
-            has_libfdk_aac = 'libfdk_aac' in result.stdout
-            
-            if not has_libfdk_aac:
-                logger.error(
-                    "FFmpeg found but libfdk_aac codec is not available. "
-                    "Please install FFmpeg with libfdk_aac support."
-                )
-            
-            return has_libfdk_aac
-            
         except (subprocess.CalledProcessError, FileNotFoundError):
             logger.error(f"FFmpeg not found at: {self.ffmpeg_bin}")
             return False
+
+        # ffmpeg -encoders prints lines like:
+        #   " A....D libfdk_aac           Fraunhofer FDK AAC (codec aac)"
+        # The encoder name sits in the second column after the flags.
+        pattern = re.compile(r'^\s*[A-Z.]+\s+libfdk_aac\b', re.MULTILINE)
+        if pattern.search(result.stdout):
+            return True
+
+        logger.error(
+            "FFmpeg found but libfdk_aac encoder is not available. "
+            "Please install FFmpeg with libfdk_aac support."
+        )
+        return False

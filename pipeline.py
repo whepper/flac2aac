@@ -70,10 +70,10 @@ class Pipeline:
         if not self.dry_run and not self.encoder.verify_ffmpeg():
             raise RuntimeError("FFmpeg with libfdk_aac not available")
 
-        # Fail fast on obvious configuration problems (bad output_dir /
-        # work_dir) before spending time scanning the source tree.
+        # Fail fast on obvious configuration problems before spending
+        # time scanning the source tree.
         if not self.dry_run:
-            self._validate_writable_dirs()
+            self._validate_paths()
 
         # Scan for files
         logger.info("Scanning for FLAC files...")
@@ -117,7 +117,7 @@ class Pipeline:
         """Group file pairs by source album directory."""
         groups: Dict[Path, List[Tuple[Path, Path]]] = defaultdict(list)
         for source, dest in file_pairs:
-            groups[self.scanner.get_album_dir(source)].append((source, dest))
+            groups[source.parent].append((source, dest))
         return dict(groups)
 
     def _process_album(self, file_pairs: List[Tuple[Path, Path]]) -> None:
@@ -134,8 +134,8 @@ class Pipeline:
         When work_dir is disabled the same steps run directly in
         output_dir (original behaviour).
         """
-        source_album_dir = self.scanner.get_album_dir(file_pairs[0][0])
-        final_album_dir = self.scanner.get_album_dir(file_pairs[0][1])
+        source_album_dir = file_pairs[0][0].parent
+        final_album_dir = file_pairs[0][1].parent
 
         if self.use_work_dir:
             work_album_dir = self._make_work_album_dir(final_album_dir)
@@ -250,23 +250,34 @@ class Pipeline:
         work_album_dir.mkdir(parents=True, exist_ok=True)
         return work_album_dir
 
-    def _validate_writable_dirs(self) -> None:
-        """Ensure output_dir (and work_dir, if set) exist and are writable.
+    def _validate_paths(self) -> None:
+        """Validate configured paths before scanning.
+
+        * ``input_dir`` must exist and be a readable directory.
+        * ``output_dir`` (and ``work_dir``, if configured) are created if
+          missing and must be writable.
 
         Called before scanning so misconfiguration fails fast with a
-        clear error instead of crashing mid-encode.
+        clear error instead of crashing mid-encode or silently
+        reporting "no FLAC files found".
         """
-        dirs = [("output_dir", self.config.paths.output_dir)]
-        if self.use_work_dir:
-            dirs.append(("work_dir", self.config.paths.work_dir))
+        input_dir = self.config.paths.input_dir
+        if not input_dir.exists():
+            raise RuntimeError(f"input_dir does not exist: {input_dir}")
+        if not input_dir.is_dir():
+            raise RuntimeError(f"input_dir is not a directory: {input_dir}")
+        if not os.access(input_dir, os.R_OK):
+            raise RuntimeError(f"input_dir is not readable: {input_dir}")
 
-        for name, path in dirs:
+        writable = [("output_dir", self.config.paths.output_dir)]
+        if self.use_work_dir:
+            writable.append(("work_dir", self.config.paths.work_dir))
+
+        for name, path in writable:
             try:
                 path.mkdir(parents=True, exist_ok=True)
             except OSError as e:
-                raise RuntimeError(
-                    f"Cannot create {name} {path}: {e}"
-                ) from e
+                raise RuntimeError(f"Cannot create {name} {path}: {e}") from e
             if not os.access(path, os.W_OK):
                 raise RuntimeError(f"{name} is not writable: {path}")
 
@@ -275,25 +286,27 @@ class Pipeline:
     ) -> None:
         """Move a completed album from work_dir to output_dir.
 
-        Creates the parent directory in output_dir if needed,
-        then moves every file individually so that an existing
-        partial output is overwritten correctly.
+        Creates the parent directory in output_dir if needed, then moves
+        every file individually. We try an atomic rename first (works
+        when work_dir and output_dir share a filesystem) and fall back
+        to ``shutil.move`` for the common cross-filesystem case — for
+        example, a tmpfs work_dir paired with a disk output_dir.
         """
         final_album_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"  Moving album to output: {final_album_dir}")
 
         for work_file in work_album_dir.iterdir():
             dest_file = final_album_dir / work_file.name
-            if dest_file.exists():
-                dest_file.unlink()
-            shutil.move(str(work_file), str(dest_file))
+            try:
+                work_file.replace(dest_file)
+            except OSError:
+                # Cross-device or platform where rename can't overwrite.
+                shutil.move(str(work_file), str(dest_file))
             logger.debug(f"  Moved: {work_file.name}")
 
-        # Remove now-empty work album directory
         try:
             work_album_dir.rmdir()
         except OSError:
-            # Not empty — leave cleanup to OS / next run
             logger.debug(f"  Could not remove work dir (not empty): {work_album_dir}")
 
     def _print_dry_run_report(self, file_pairs: List[Tuple[Path, Path]]) -> None:
