@@ -39,12 +39,15 @@ class EncodingConfig:
     """Encoding configuration."""
     vbr_quality: int = 5
     output_format: str = "m4a"
+    encode_timeout: int = 1800
 
     def __post_init__(self):
         if not 1 <= self.vbr_quality <= 5:
             raise ValueError("vbr_quality must be between 1 and 5")
         if self.output_format not in ["m4a", "mp4"]:
             raise ValueError("output_format must be 'm4a' or 'mp4'")
+        if self.encode_timeout <= 0:
+            raise ValueError("encode_timeout must be > 0 (seconds)")
 
 
 @dataclass

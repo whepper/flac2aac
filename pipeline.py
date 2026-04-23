@@ -7,13 +7,13 @@ writes to the final storage device (ideal for RAM disk workflows).
 """
 
 import logging
+import os
 import shutil
-import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Tuple
 
 from config import Config
 from encoder import Encoder, EncodingError
@@ -69,6 +69,11 @@ class Pipeline:
         # Verify FFmpeg availability
         if not self.dry_run and not self.encoder.verify_ffmpeg():
             raise RuntimeError("FFmpeg with libfdk_aac not available")
+
+        # Fail fast on obvious configuration problems (bad output_dir /
+        # work_dir) before spending time scanning the source tree.
+        if not self.dry_run:
+            self._validate_writable_dirs()
 
         # Scan for files
         logger.info("Scanning for FLAC files...")
@@ -210,7 +215,9 @@ class Pipeline:
     def _encode_file(self, source: Path, dest: Path) -> bool:
         """Encode a single file and copy its metadata.
 
-        Returns True on success.
+        Returns True on success. On failure any partially-written
+        destination file is removed so the next run does not skip it
+        via the "output already exists" shortcut.
         """
         try:
             self.encoder.encode(source, dest)
@@ -218,9 +225,11 @@ class Pipeline:
             return True
         except EncodingError as exc:
             logger.error(f"  Encoding failed for {source.name}: {exc}")
+            dest.unlink(missing_ok=True)
             return False
         except Exception as exc:
             logger.error(f"  Failed to process {source.name}: {exc}")
+            dest.unlink(missing_ok=True)
             return False
 
     def _make_work_album_dir(self, final_album_dir: Path) -> Path:
@@ -229,10 +238,37 @@ class Pipeline:
         Uses the same relative path as the final destination so that
         log messages are easy to correlate.
         """
-        relative = final_album_dir.relative_to(self.config.paths.output_dir)
+        output_dir = self.config.paths.output_dir
+        try:
+            relative = final_album_dir.relative_to(output_dir)
+        except ValueError as e:
+            raise RuntimeError(
+                f"Album destination {final_album_dir} is not inside output_dir "
+                f"{output_dir}; cannot place it in work_dir"
+            ) from e
         work_album_dir = self.config.paths.work_dir / relative
         work_album_dir.mkdir(parents=True, exist_ok=True)
         return work_album_dir
+
+    def _validate_writable_dirs(self) -> None:
+        """Ensure output_dir (and work_dir, if set) exist and are writable.
+
+        Called before scanning so misconfiguration fails fast with a
+        clear error instead of crashing mid-encode.
+        """
+        dirs = [("output_dir", self.config.paths.output_dir)]
+        if self.use_work_dir:
+            dirs.append(("work_dir", self.config.paths.work_dir))
+
+        for name, path in dirs:
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                raise RuntimeError(
+                    f"Cannot create {name} {path}: {e}"
+                ) from e
+            if not os.access(path, os.W_OK):
+                raise RuntimeError(f"{name} is not writable: {path}")
 
     def _move_album_to_output(
         self, work_album_dir: Path, final_album_dir: Path
