@@ -14,6 +14,7 @@ operation — minimising writes to spinning disks, NAS shares, or SSDs.
 
 - Parallel FLAC-to-AAC encoding via FFmpeg + libfdk_aac (VBR 1-5)
 - Full FLAC metadata → M4A tag mapping (title, artist, album, year, track, disc, …)
+- Extended tag pass-through: BPM, compilation, grouping, MusicBrainz IDs, ISRC, label, catalogue number, barcode
 - Embedded cover art copied to M4A files
 - Standalone `cover.jpg` copied/extracted per album
 - EBU R128 / ReplayGain 2.0 track & album gain tagging (via r128gain)
@@ -21,6 +22,7 @@ operation — minimising writes to spinning disks, NAS shares, or SSDs.
 - **Working directory support** — encode to RAM disk, move to output when done
 - Recursive directory scanning with mirrored output structure
 - Configurable via a single `config.toml` file
+- CLI override flags — `--input`, `--output`, `--workers`, `--log-level` for ad-hoc runs without editing the config
 
 ---
 
@@ -137,7 +139,37 @@ python main.py --config my_config.toml
 
 # Dry run — scan and report without encoding
 python main.py --dry-run
+
+# Override config values on the command line
+python main.py --input /music/flac --output /music/aac
+python main.py --workers 8 --log-level DEBUG
+
+# Print version and exit
+python main.py --version
 ```
+
+### CLI flags
+
+| Flag | Overrides | Notes |
+|---|---|---|
+| `--config PATH` | — | Path to TOML file (default: `config.toml`) |
+| `--dry-run` | — | Scan and report, no encoding |
+| `--input DIR` | `[paths] input_dir` | |
+| `--output DIR` | `[paths] output_dir` | |
+| `--workers N` | `[processing] workers` | Must be ≥ 1 |
+| `--log-level LEVEL` | `[processing] log_level` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `--version` | — | Print version and exit |
+
+---
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | All files converted successfully |
+| `1` | One or more files/albums failed, or a fatal runtime error occurred |
+| `2` | Configuration file not found, invalid, or a CLI override was rejected |
+| `130` | Interrupted by Ctrl+C |
 
 ---
 
@@ -158,6 +190,7 @@ python main.py --dry-run
 |---|---|---|
 | `vbr_quality` | `5` | FDK-AAC VBR quality 1–5 (5 = highest) |
 | `output_format` | `"m4a"` | Container: `"m4a"` or `"mp4"` |
+| `encode_timeout` | `1800` | Seconds before FFmpeg is killed for a stalled file |
 
 ### `[metadata]`
 
@@ -176,6 +209,7 @@ python main.py --dry-run
 | `enable_replaygain` | `true` | Write ReplayGain 2.0 tags |
 | `enable_itunes_soundcheck` | `true` | Write iTunes SoundCheck (iTunNORM) tag |
 | `reference_loudness` | `-18.0` | Target in LUFS (informational; r128gain uses −18 LUFS fixed) |
+| `reuse_existing_replaygain` | `false` | Skip loudness analysis when the source FLAC already has ReplayGain tags |
 
 ### `[processing]`
 

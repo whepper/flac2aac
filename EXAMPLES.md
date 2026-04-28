@@ -6,8 +6,9 @@
 2. [RAM disk workflow](#ram-disk-workflow)
 3. [NAS / external drive workflow](#nas--external-drive-workflow)
 4. [Multiple quality profiles](#multiple-quality-profiles)
-5. [Linux FFmpeg build with libfdk_aac](#linux-ffmpeg-build-with-libfdk_aac)
-6. [Automation with cron / launchd](#automation)
+5. [Ad-hoc overrides](#ad-hoc-overrides)
+6. [Linux FFmpeg build with libfdk_aac](#linux-ffmpeg-build-with-libfdk_aac)
+7. [Automation with cron / launchd](#automation)
 
 ---
 
@@ -131,6 +132,24 @@ cp config.toml config_mobile.toml
 ```bash
 python main.py --config config_hifi.toml
 python main.py --config config_mobile.toml
+```
+
+---
+
+## Ad-hoc overrides
+
+CLI flags override the corresponding config-file values, so you can do
+one-off runs without editing `config.toml`:
+
+```bash
+# Use a different source/destination just this once
+python main.py --input /Volumes/NAS/NewAlbums --output /Volumes/NAS/Music/AAC
+
+# Throttle to 2 workers and see verbose output
+python main.py --workers 2 --log-level DEBUG
+
+# Combine a custom config file with a worker override
+python main.py --config config_hifi.toml --workers 8
 ```
 
 ---
