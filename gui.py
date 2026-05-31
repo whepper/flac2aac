@@ -35,7 +35,7 @@ def _bundled_ffmpeg() -> str:
     """Return path to bundled FFmpeg, falling back to system 'ffmpeg'."""
     base = getattr(sys, "_MEIPASS", None)
     if base:
-        candidate = Path(base) / "ffmpeg"
+        candidate = Path(base) / "bin" / "ffmpeg"
         if candidate.exists():
             return str(candidate)
     return "ffmpeg"

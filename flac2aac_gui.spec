@@ -22,7 +22,7 @@ HERE = Path(SPECPATH)
 _ffmpeg_src = HERE / "vendor" / "ffmpeg"
 _binaries = []
 if _ffmpeg_src.exists():
-    _binaries = [(str(_ffmpeg_src), ".")]
+    _binaries = [(str(_ffmpeg_src), "bin")]  # must not be "." — conflicts with ffmpeg Python package
 else:
     import warnings
     warnings.warn(
