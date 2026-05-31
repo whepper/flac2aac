@@ -135,8 +135,20 @@ class App(tk.Tk):
         self._workdir_var = tk.StringVar()
         ttk.Entry(folder_frame, textvariable=self._workdir_var).grid(row=2, column=1, sticky="ew", pady=(4, 0))
         ttk.Button(folder_frame, text="Browse…", command=self._browse_workdir).grid(row=2, column=2, padx=(6, 0), pady=(4, 0))
+
+        rd_ctrl = ttk.Frame(folder_frame)
+        rd_ctrl.grid(row=3, column=1, sticky="w", pady=(2, 0))
+        ttk.Label(rd_ctrl, text="Size:").pack(side="left")
+        self._ramdisk_size_var = tk.IntVar(value=1024)
+        ttk.Spinbox(rd_ctrl, from_=256, to=8192, increment=256,
+                    textvariable=self._ramdisk_size_var, width=6).pack(side="left", padx=(4, 2))
+        ttk.Label(rd_ctrl, text="MB").pack(side="left")
+        self._create_rd_btn = ttk.Button(rd_ctrl, text="Create", command=self._create_ramdisk, width=8)
+        self._create_rd_btn.pack(side="left", padx=(12, 4))
+        self._eject_rd_btn = ttk.Button(rd_ctrl, text="Eject", command=self._eject_ramdisk, width=8)
+        self._eject_rd_btn.pack(side="left")
         ttk.Label(folder_frame, text="Optional — encode here first, then move to output", foreground="gray").grid(
-            row=3, column=1, sticky="w")
+            row=4, column=1, sticky="w")
 
         # ── Encoding ─────────────────────────────────────────────────
         enc_frame = ttk.LabelFrame(self, text="Encoding", padding=6)
@@ -227,6 +239,54 @@ class App(tk.Tk):
         path = filedialog.askdirectory(title="Select RAM disk / work directory")
         if path:
             self._workdir_var.set(path)
+
+    def _create_ramdisk(self) -> None:
+        size_mb = self._ramdisk_size_var.get()
+        sectors = size_mb * 2048  # 512-byte sectors
+        self._create_rd_btn.configure(state="disabled")
+        self._append_log(f"Creating {size_mb} MB RAM disk…")
+
+        def _run() -> None:
+            import subprocess
+            try:
+                # Step 1: allocate the device
+                result = subprocess.run(
+                    ["hdiutil", "attach", "-nomount", f"ram://{sectors}"],
+                    capture_output=True, text=True, check=True,
+                )
+                device = result.stdout.strip()
+
+                # Step 2: format as HFS+ named RAMDisk
+                subprocess.run(
+                    ["diskutil", "erasevolume", "HFS+", "RAMDisk", device],
+                    capture_output=True, text=True, check=True,
+                )
+                self._queue.put({"type": "ramdisk_created", "path": "/Volumes/RAMDisk"})
+            except subprocess.CalledProcessError as exc:
+                err = (exc.stderr or exc.stdout or str(exc)).strip()
+                self._queue.put({"type": "ramdisk_error", "msg": err})
+
+        threading.Thread(target=_run, daemon=True).start()
+        self.after(100, self._poll_queue)
+
+    def _eject_ramdisk(self) -> None:
+        path = self._workdir_var.get().strip() or "/Volumes/RAMDisk"
+        self._append_log(f"Ejecting {path}…")
+
+        def _run() -> None:
+            import subprocess
+            try:
+                subprocess.run(
+                    ["hdiutil", "detach", path],
+                    capture_output=True, text=True, check=True,
+                )
+                self._queue.put({"type": "ramdisk_ejected", "path": path})
+            except subprocess.CalledProcessError as exc:
+                err = (exc.stderr or exc.stdout or str(exc)).strip()
+                self._queue.put({"type": "ramdisk_error", "msg": err})
+
+        threading.Thread(target=_run, daemon=True).start()
+        self.after(100, self._poll_queue)
 
     # ------------------------------------------------------------------
     # Config building
@@ -356,6 +416,21 @@ class App(tk.Tk):
             self._append_log(f"ERROR: {msg['msg']}")
             messagebox.showerror("Conversion error", msg["msg"])
             self._set_running(False)
+
+        elif kind == "ramdisk_created":
+            mount = msg["path"]
+            self._workdir_var.set(mount)
+            self._append_log(f"RAM disk ready at {mount}")
+            self._create_rd_btn.configure(state="normal")
+
+        elif kind == "ramdisk_ejected":
+            self._append_log(f"RAM disk ejected: {msg['path']}")
+            self._workdir_var.set("")
+
+        elif kind == "ramdisk_error":
+            self._append_log(f"RAM disk error: {msg['msg']}")
+            messagebox.showerror("RAM disk error", msg["msg"])
+            self._create_rd_btn.configure(state="normal")
 
     # ------------------------------------------------------------------
     # Helpers
