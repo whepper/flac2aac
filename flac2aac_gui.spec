@@ -32,30 +32,34 @@ else:
         stacklevel=1,
     )
 
+from PyInstaller.utils.hooks import collect_all
+
+r128gain_datas, r128gain_binaries, r128gain_hiddenimports = collect_all("r128gain")
+mutagen_datas, mutagen_binaries, mutagen_hiddenimports = collect_all("mutagen")
+
 a = Analysis(
     [str(HERE / "gui.py")],
     pathex=[str(HERE)],
-    binaries=_binaries,
-    datas=[],
-    hiddenimports=[
-        "mutagen",
-        "mutagen.flac",
-        "mutagen.mp4",
-        "mutagen.id3",
-        "r128gain",
-        "PIL",
-        "PIL.Image",
-        "PIL.JpegImagePlugin",
-        "PIL.PngImagePlugin",
-        "tomli",
-        # tkinter and its submodules are not always auto-detected on macOS
-        "tkinter",
-        "tkinter.ttk",
-        "tkinter.filedialog",
-        "tkinter.messagebox",
-        "tkinter.scrolledtext",
-        "_tkinter",
-    ],
+    binaries=_binaries + r128gain_binaries + mutagen_binaries,
+    datas=r128gain_datas + mutagen_datas,
+    hiddenimports=(
+        r128gain_hiddenimports
+        + mutagen_hiddenimports
+        + [
+            "PIL",
+            "PIL.Image",
+            "PIL.JpegImagePlugin",
+            "PIL.PngImagePlugin",
+            "tomli",
+            # tkinter and its submodules are not always auto-detected on macOS
+            "tkinter",
+            "tkinter.ttk",
+            "tkinter.filedialog",
+            "tkinter.messagebox",
+            "tkinter.scrolledtext",
+            "_tkinter",
+        ]
+    ),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
