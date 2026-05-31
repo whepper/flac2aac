@@ -131,6 +131,13 @@ class App(tk.Tk):
         ttk.Entry(folder_frame, textvariable=self._output_var).grid(row=1, column=1, sticky="ew", pady=(4, 0))
         ttk.Button(folder_frame, text="Browse…", command=self._browse_output).grid(row=1, column=2, padx=(6, 0), pady=(4, 0))
 
+        ttk.Label(folder_frame, text="RAM disk:").grid(row=2, column=0, sticky="w", padx=(0, 6), pady=(4, 0))
+        self._workdir_var = tk.StringVar()
+        ttk.Entry(folder_frame, textvariable=self._workdir_var).grid(row=2, column=1, sticky="ew", pady=(4, 0))
+        ttk.Button(folder_frame, text="Browse…", command=self._browse_workdir).grid(row=2, column=2, padx=(6, 0), pady=(4, 0))
+        ttk.Label(folder_frame, text="Optional — encode here first, then move to output", foreground="gray").grid(
+            row=3, column=1, sticky="w")
+
         # ── Encoding ─────────────────────────────────────────────────
         enc_frame = ttk.LabelFrame(self, text="Encoding", padding=6)
         enc_frame.pack(fill="x", **pad)
@@ -216,6 +223,11 @@ class App(tk.Tk):
         if path:
             self._output_var.set(path)
 
+    def _browse_workdir(self) -> None:
+        path = filedialog.askdirectory(title="Select RAM disk / work directory")
+        if path:
+            self._workdir_var.set(path)
+
     # ------------------------------------------------------------------
     # Config building
     # ------------------------------------------------------------------
@@ -228,11 +240,14 @@ class App(tk.Tk):
         if not output_dir:
             raise ConfigError("Output folder is required.")
 
+        work_dir = self._workdir_var.get().strip() or None
+
         return Config(
             paths=PathsConfig(
                 input_dir=input_dir,
                 output_dir=output_dir,
                 ffmpeg_bin=_bundled_ffmpeg(),
+                work_dir=work_dir,
             ),
             encoding=EncodingConfig(
                 vbr_quality=int(self._quality_var.get()),
