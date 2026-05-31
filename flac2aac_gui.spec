@@ -32,19 +32,23 @@ else:
         stacklevel=1,
     )
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 r128gain_datas, r128gain_binaries, r128gain_hiddenimports = collect_all("r128gain")
 mutagen_datas, mutagen_binaries, mutagen_hiddenimports = collect_all("mutagen")
+tqdm_datas, tqdm_binaries, tqdm_hiddenimports = collect_all("tqdm")
+platformdirs_datas, platformdirs_binaries, platformdirs_hiddenimports = collect_all("platformdirs")
 
 a = Analysis(
     [str(HERE / "gui.py")],
     pathex=[str(HERE)],
-    binaries=_binaries + r128gain_binaries + mutagen_binaries,
-    datas=r128gain_datas + mutagen_datas,
+    binaries=_binaries + r128gain_binaries + mutagen_binaries + tqdm_binaries + platformdirs_binaries,
+    datas=r128gain_datas + mutagen_datas + tqdm_datas + platformdirs_datas,
     hiddenimports=(
         r128gain_hiddenimports
         + mutagen_hiddenimports
+        + tqdm_hiddenimports
+        + platformdirs_hiddenimports
         + [
             "PIL",
             "PIL.Image",

@@ -353,13 +353,12 @@ class App(tk.Tk):
         if not dry_run and (self._rg_var.get() or self._sc_var.get()):
             try:
                 import r128gain  # noqa: F401
-            except ImportError:
+            except Exception as _exc:
                 answer = messagebox.askyesno(
-                    "r128gain not installed",
-                    "ReplayGain / iTunes SoundCheck tagging requires the r128gain package, "
-                    "which is not installed in this environment.\n\n"
-                    "Install it with:\n  pip install r128gain\n\n"
-                    "Continue without loudness tagging?",
+                    "r128gain not available",
+                    f"ReplayGain / iTunes SoundCheck tagging requires the r128gain package, "
+                    f"which could not be loaded ({_exc}).\n\n"
+                    f"Continue without loudness tagging?",
                 )
                 if not answer:
                     return
