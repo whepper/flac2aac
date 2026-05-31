@@ -278,6 +278,12 @@ source .venv/bin/activate
 pip install -r requirements.txt -r requirements-gui.txt
 ```
 
+> **Tip:** If `pip install -r requirements.txt` completes without error but ReplayGain
+> tagging still doesn't work, install `r128gain` explicitly:
+> ```bash
+> pip install r128gain
+> ```
+
 ### 3 — Get FFmpeg with libfdk_aac
 
 Homebrew's default FFmpeg omits libfdk_aac for licensing reasons.
@@ -308,6 +314,13 @@ double-click it directly — no terminal needed.
 > **Note:** The `.venv` must be active when running `pyinstaller` so it can
 > find all installed packages. If you open a new terminal session, run
 > `source .venv/bin/activate` again before building.
+>
+> **Tkinter not found?** Homebrew Python requires a separate package for the GUI toolkit.
+> Install it matching your Python version, then rebuild:
+> ```bash
+> brew install python-tk@3.14   # adjust to match: python3 --version
+> rm -rf dist build && pyinstaller flac2aac_gui.spec
+> ```
 
 ### Running without building
 
