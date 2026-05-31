@@ -17,7 +17,7 @@ class Scanner:
     
     def __init__(self, config: Config):
         """Initialize scanner.
-        
+
         Args:
             config: Application configuration
         """
@@ -25,6 +25,7 @@ class Scanner:
         self.input_dir = config.paths.input_dir
         self.output_dir = config.paths.output_dir
         self.output_ext = f".{config.encoding.output_format}"
+        self.skipped = 0
     
     def scan(self) -> Iterator[Tuple[Path, Path]]:
         """Recursively scan for FLAC files.
@@ -57,15 +58,17 @@ class Scanner:
             flac_files.append(path)
 
         logger.info(f"Found {len(flac_files)} FLAC file(s)")
-        
+        self.skipped = 0
+
         for source_path in flac_files:
             dest_path = self._get_destination_path(source_path)
-            
+
             # Skip if exists and overwrite disabled
             if dest_path.exists() and not self.config.processing.overwrite_existing:
                 logger.debug(f"Skipping existing file: {dest_path}")
+                self.skipped += 1
                 continue
-            
+
             yield source_path, dest_path
     
     def _get_destination_path(self, source_path: Path) -> Path:

@@ -95,12 +95,14 @@ enable_replaygain = true
 # for volume normalization in iTunes, Music.app, and iOS
 enable_itunes_soundcheck = true
 
-# Reference loudness target in LUFS (Loudness Units relative to Full Scale)
-# EBU R128 standard: -18.0 LUFS (broadcast)
-# Alternative common targets:
-#   -16.0 LUFS: Spotify, YouTube
-#   -14.0 LUFS: Tidal, Amazon Music
-#   -18.0 LUFS: iTunes/Apple Music (recommended)
+# iTunNORM (SoundCheck) target loudness in LUFS.
+# This shifts the iTunNORM gain value written into each M4A.
+# It does NOT affect the ReplayGain tags (r128gain always targets
+# -18 LUFS per the ReplayGain 2.0 / EBU R128 standard).
+#
+# -18.0 LUFS: iTunes/Apple Music default (recommended)
+# -14.0 LUFS: Tidal, Amazon Music normalisation level
+# -16.0 LUFS: Spotify, YouTube normalisation level
 reference_loudness = -18.0
 
 # When true and every source FLAC in an album already has

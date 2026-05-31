@@ -87,12 +87,13 @@ class Pipeline:
         # Scan for files
         logger.info("Scanning for FLAC files...")
         file_pairs = list(self.scanner.scan())
+        self.stats.skipped = self.scanner.skipped
 
-        if not file_pairs:
+        if not file_pairs and self.stats.skipped == 0:
             logger.warning("No FLAC files found to process")
             return self.stats
 
-        self.stats.total_files = len(file_pairs)
+        self.stats.total_files = len(file_pairs) + self.stats.skipped
         logger.info(f"Found {self.stats.total_files} file(s) to process")
 
         if self.use_work_dir:
@@ -323,6 +324,10 @@ class Pipeline:
 
         for work_file in work_album_dir.iterdir():
             dest_file = final_album_dir / work_file.name
+            if dest_file.exists() and not self.config.processing.overwrite_existing:
+                logger.debug(f"  Skipping existing output file: {dest_file.name}")
+                work_file.unlink(missing_ok=True)
+                continue
             try:
                 work_file.replace(dest_file)
             except OSError:

@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
+from __init__ import __version__
 from config import (
     VALID_LOG_LEVELS,
     Config,
@@ -26,12 +27,6 @@ EXIT_OK = 0
 EXIT_RUNTIME = 1       # some files/albums failed, ffmpeg missing, etc.
 EXIT_CONFIG = 2        # config not found, malformed, or invalid
 EXIT_SIGINT = 130      # Ctrl+C
-
-
-# Kept in sync with the top-level __init__.py ``__version__``; duplicated
-# so ``python main.py --version`` works without treating this directory
-# as an importable package.
-__version__ = "1.0.0"
 
 
 def setup_logging(level: str = "INFO") -> None:

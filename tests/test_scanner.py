@@ -115,3 +115,39 @@ def test_missing_input_dir_yields_nothing(tmp_path):
     Pipeline); the iterator simply produces no files."""
     cfg = _make_config(tmp_path / "missing", tmp_path / "out")
     assert list(Scanner(cfg).scan()) == []
+
+
+def test_skipped_counter_tracks_existing_files(tmp_path):
+    """scanner.skipped is incremented for each file whose output already exists."""
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    (input_dir / "song1.flac").write_bytes(b"")
+    (input_dir / "song2.flac").write_bytes(b"")
+    # Pre-create the destination for song1 so it gets skipped.
+    dest = output_dir / "song1.m4a"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"")
+
+    cfg = _make_config(input_dir, output_dir, overwrite=False)
+    scanner = Scanner(cfg)
+    pairs = list(scanner.scan())
+
+    assert len(pairs) == 1
+    assert scanner.skipped == 1
+
+
+def test_skipped_counter_is_zero_when_overwrite_enabled(tmp_path):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    (input_dir / "song.flac").write_bytes(b"")
+    dest = output_dir / "song.m4a"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"")
+
+    cfg = _make_config(input_dir, output_dir, overwrite=True)
+    scanner = Scanner(cfg)
+    list(scanner.scan())
+
+    assert scanner.skipped == 0
