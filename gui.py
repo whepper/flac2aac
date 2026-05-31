@@ -245,6 +245,10 @@ class App(tk.Tk):
         size_mb = self._ramdisk_size_var.get()
         sectors = size_mb * 2048  # 512-byte sectors
         self._create_rd_btn.configure(state="disabled")
+        self._eject_rd_btn.configure(state="disabled")
+        self._progress.configure(mode="indeterminate")
+        self._progress.start(15)
+        self._progress_label.configure(text="Creating…")
         self._append_log(f"Creating {size_mb} MB RAM disk…")
 
         def _run() -> None:
@@ -271,6 +275,11 @@ class App(tk.Tk):
 
     def _eject_ramdisk(self) -> None:
         path = self._workdir_var.get().strip() or "/Volumes/RAMDisk"
+        self._create_rd_btn.configure(state="disabled")
+        self._eject_rd_btn.configure(state="disabled")
+        self._progress.configure(mode="indeterminate")
+        self._progress.start(15)
+        self._progress_label.configure(text="Ejecting…")
         self._append_log(f"Ejecting {path}…")
 
         def _run() -> None:
@@ -433,16 +442,29 @@ class App(tk.Tk):
             mount = msg["path"]
             self._workdir_var.set(mount)
             self._append_log(f"RAM disk ready at {mount}")
+            self._progress.stop()
+            self._progress.configure(mode="determinate", value=0)
+            self._progress_label.configure(text="")
             self._create_rd_btn.configure(state="normal")
+            self._eject_rd_btn.configure(state="normal")
 
         elif kind == "ramdisk_ejected":
             self._append_log(f"RAM disk ejected: {msg['path']}")
             self._workdir_var.set("")
+            self._progress.stop()
+            self._progress.configure(mode="determinate", value=0)
+            self._progress_label.configure(text="")
+            self._create_rd_btn.configure(state="normal")
+            self._eject_rd_btn.configure(state="normal")
 
         elif kind == "ramdisk_error":
             self._append_log(f"RAM disk error: {msg['msg']}")
             messagebox.showerror("RAM disk error", msg["msg"])
+            self._progress.stop()
+            self._progress.configure(mode="determinate", value=0)
+            self._progress_label.configure(text="")
             self._create_rd_btn.configure(state="normal")
+            self._eject_rd_btn.configure(state="normal")
 
     # ------------------------------------------------------------------
     # Helpers
