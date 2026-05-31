@@ -108,6 +108,7 @@ class App(tk.Tk):
 
         self._build_ui()
         self._set_running(False)
+        self.after(100, self._poll_queue)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -267,7 +268,6 @@ class App(tk.Tk):
                 self._queue.put({"type": "ramdisk_error", "msg": err})
 
         threading.Thread(target=_run, daemon=True).start()
-        self.after(100, self._poll_queue)
 
     def _eject_ramdisk(self) -> None:
         path = self._workdir_var.get().strip() or "/Volumes/RAMDisk"
@@ -286,7 +286,6 @@ class App(tk.Tk):
                 self._queue.put({"type": "ramdisk_error", "msg": err})
 
         threading.Thread(target=_run, daemon=True).start()
-        self.after(100, self._poll_queue)
 
     # ------------------------------------------------------------------
     # Config building
@@ -366,7 +365,6 @@ class App(tk.Tk):
         self._worker = _ConversionWorker(config, self._queue, self._cancel_event, dry_run=dry_run)
         self._set_running(True)
         self._worker.start()
-        self.after(100, self._poll_queue)
 
     def _on_cancel(self) -> None:
         if self._worker and self._worker.is_alive():
@@ -385,8 +383,7 @@ class App(tk.Tk):
         except queue.Empty:
             pass
 
-        if self._worker and self._worker.is_alive():
-            self.after(100, self._poll_queue)
+        self.after(100, self._poll_queue)
 
     def _handle_message(self, msg: dict) -> None:
         kind = msg.get("type")
