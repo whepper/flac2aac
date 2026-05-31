@@ -9,11 +9,12 @@ writes to the final storage device (ideal for RAM disk workflows).
 import logging
 import os
 import shutil
+import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Optional, Tuple
 
 from config import Config
 from encoder import Encoder, EncodingError
@@ -38,15 +39,22 @@ class ProcessingStats:
 class Pipeline:
     """Main processing pipeline."""
 
-    def __init__(self, config: Config, dry_run: bool = False):
+    def __init__(
+        self,
+        config: Config,
+        dry_run: bool = False,
+        cancel_event: Optional[threading.Event] = None,
+    ):
         """Initialize pipeline.
 
         Args:
             config: Application configuration
             dry_run: If True, only scan and report without processing
+            cancel_event: Optional event; when set the album loop stops cleanly
         """
         self.config = config
         self.dry_run = dry_run
+        self.cancel_event = cancel_event
         self.use_work_dir = (
             config.paths.work_dir is not None
             and str(config.paths.work_dir).strip() != ""
@@ -105,6 +113,9 @@ class Pipeline:
         # on. The per-album cleanup inside _process_album already
         # takes care of work_dir state.
         for album_dir, files in album_groups.items():
+            if self.cancel_event and self.cancel_event.is_set():
+                logger.info("Conversion cancelled by user.")
+                break
             logger.info(f"\nProcessing album: {album_dir}")
             try:
                 self._process_album(files)
