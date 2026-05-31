@@ -12,6 +12,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
+from typing import Optional
+
 from config import (
     Config,
     ConfigError,
@@ -100,7 +102,7 @@ class App(tk.Tk):
 
         self._queue: queue.Queue = queue.Queue()
         self._cancel_event: threading.Event = threading.Event()
-        self._worker: _ConversionWorker | None = None
+        self._worker: Optional[_ConversionWorker] = None
         self._total_files = 0
         self._processed_files = 0
 
