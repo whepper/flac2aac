@@ -73,6 +73,17 @@ class _ConversionWorker(threading.Thread):
         self._dry_run = dry_run
 
     def run(self) -> None:
+        import os
+
+        # r128gain spawns child processes that look up ffmpeg by name on PATH.
+        # Prepend the directory of the configured (or bundled) binary so every
+        # subprocess it spawns finds the right executable automatically.
+        ffmpeg_bin = self._config.paths.ffmpeg_bin
+        ffmpeg_dir = str(Path(ffmpeg_bin).parent.resolve())
+        prev_path = os.environ.get("PATH", "")
+        if ffmpeg_dir and ffmpeg_dir != ".":
+            os.environ["PATH"] = ffmpeg_dir + os.pathsep + prev_path
+
         root_logger = logging.getLogger()
         prev_level = root_logger.level
         root_logger.setLevel(self._config.processing.log_level)
@@ -92,6 +103,7 @@ class _ConversionWorker(threading.Thread):
         finally:
             root_logger.removeHandler(handler)
             root_logger.setLevel(prev_level)
+            os.environ["PATH"] = prev_path
 
 
 class App(tk.Tk):
