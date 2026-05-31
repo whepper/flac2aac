@@ -551,6 +551,9 @@ class App(tk.Tk):
 
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()  # required for PyInstaller + r128gain
+    # 'fork' eliminates PyInstaller bootloader startup cost for every r128gain
+    # worker process. Safe here because no threads exist yet at this point.
+    multiprocessing.set_start_method("fork")
+    multiprocessing.freeze_support()
     app = App()
     app.mainloop()
