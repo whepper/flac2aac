@@ -193,6 +193,32 @@ class App(tk.Tk):
         ttk.Checkbutton(proc_frame, text="Overwrite existing files",
                         variable=self._overwrite_var).grid(row=0, column=2, sticky="w")
 
+        # ── Cover Art ────────────────────────────────────────────────
+        art_frame = ttk.LabelFrame(self, text="Cover Art", padding=6)
+        art_frame.pack(fill="x", **pad)
+
+        self._copy_artwork_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(art_frame, text="Embed artwork in M4A files",
+                        variable=self._copy_artwork_var).grid(row=0, column=0, columnspan=2, sticky="w")
+
+        self._cover_file_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(art_frame, text="Copy cover file per album",
+                        variable=self._cover_file_var,
+                        command=self._on_cover_file_toggle).grid(row=0, column=2, columnspan=2, sticky="w", padx=(20, 0))
+
+        ttk.Label(art_frame, text="Max size:").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self._cover_max_size_var = tk.IntVar(value=2000)
+        self._cover_max_size_spin = ttk.Spinbox(art_frame, from_=0, to=9999, increment=100,
+                                                 textvariable=self._cover_max_size_var, width=6)
+        self._cover_max_size_spin.grid(row=1, column=1, sticky="w", padx=(6, 4), pady=(4, 0))
+        ttk.Label(art_frame, text="px (0 = no resize)").grid(row=1, column=2, sticky="w", pady=(4, 0))
+
+        ttk.Label(art_frame, text="JPEG quality:").grid(row=1, column=3, sticky="w", padx=(20, 0), pady=(4, 0))
+        self._cover_jpeg_quality_var = tk.IntVar(value=95)
+        self._cover_jpeg_quality_spin = ttk.Spinbox(art_frame, from_=1, to=95, increment=5,
+                                                     textvariable=self._cover_jpeg_quality_var, width=5)
+        self._cover_jpeg_quality_spin.grid(row=1, column=4, sticky="w", padx=(6, 0), pady=(4, 0))
+
         # ── Loudness ─────────────────────────────────────────────────
         loud_frame = ttk.LabelFrame(self, text="Loudness", padding=6)
         loud_frame.pack(fill="x", **pad)
@@ -204,6 +230,17 @@ class App(tk.Tk):
         self._sc_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(loud_frame, text="iTunes SoundCheck", variable=self._sc_var).grid(
             row=0, column=1, sticky="w", padx=(20, 0))
+
+        self._reuse_rg_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(loud_frame, text="Reuse existing ReplayGain tags",
+                        variable=self._reuse_rg_var).grid(row=0, column=2, sticky="w", padx=(20, 0))
+
+        ttk.Label(loud_frame, text="Reference:").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self._ref_loudness_var = tk.DoubleVar(value=-18.0)
+        ttk.Spinbox(loud_frame, from_=-30, to=0, increment=0.5,
+                    textvariable=self._ref_loudness_var, width=6,
+                    format="%.1f").grid(row=1, column=1, sticky="w", padx=(6, 4), pady=(4, 0))
+        ttk.Label(loud_frame, text="LUFS").grid(row=1, column=2, sticky="w", pady=(4, 0))
 
         # ── Buttons + progress ────────────────────────────────────────
         ctrl_frame = ttk.Frame(self, padding=(10, 6))
@@ -230,7 +267,7 @@ class App(tk.Tk):
 
         self._log_text = scrolledtext.ScrolledText(
             log_frame, state="disabled", wrap="word",
-            font=("Menlo", 11), relief="flat",
+            font=("Menlo", 9), relief="flat",
         )
         self._log_text.grid(row=0, column=0, sticky="nsew")
 
@@ -250,6 +287,11 @@ class App(tk.Tk):
         path = filedialog.askdirectory(title="Select output folder (AAC files)")
         if path:
             self._output_var.set(path)
+
+    def _on_cover_file_toggle(self) -> None:
+        state = "normal" if self._cover_file_var.get() else "disabled"
+        self._cover_max_size_spin.configure(state=state)
+        self._cover_jpeg_quality_spin.configure(state=state)
 
     def _browse_workdir(self) -> None:
         path = filedialog.askdirectory(title="Select RAM disk / work directory")
@@ -337,12 +379,18 @@ class App(tk.Tk):
                 output_format=self._format_var.get(),
             ),
             metadata=MetadataConfig(
-                copy_artwork=True,
-                cover_file=CoverFileConfig(),
+                copy_artwork=self._copy_artwork_var.get(),
+                cover_file=CoverFileConfig(
+                    enabled=self._cover_file_var.get(),
+                    max_size=int(self._cover_max_size_var.get()),
+                    jpeg_quality=int(self._cover_jpeg_quality_var.get()),
+                ),
             ),
             loudness=LoudnessConfig(
                 enable_replaygain=self._rg_var.get(),
                 enable_itunes_soundcheck=self._sc_var.get(),
+                reference_loudness=float(self._ref_loudness_var.get()),
+                reuse_existing_replaygain=self._reuse_rg_var.get(),
             ),
             processing=ProcessingConfig(
                 workers=int(self._workers_var.get()),
