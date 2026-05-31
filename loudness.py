@@ -103,7 +103,8 @@ class LoudnessProcessor:
                 file_paths,
                 album_gain=True,
                 skip_tagged=False,
-                opus_output_gain=False
+                opus_output_gain=False,
+                ffmpeg_path=self.config.paths.ffmpeg_bin,
             )
         except Exception as e:
             logger.error(f"Failed to add ReplayGain tags: {e}")
