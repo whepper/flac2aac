@@ -48,8 +48,13 @@ a = Analysis(
         "PIL.JpegImagePlugin",
         "PIL.PngImagePlugin",
         "tomli",
-        # tkinter scrolledtext is not always auto-detected
+        # tkinter and its submodules are not always auto-detected on macOS
+        "tkinter",
+        "tkinter.ttk",
+        "tkinter.filedialog",
+        "tkinter.messagebox",
         "tkinter.scrolledtext",
+        "_tkinter",
     ],
     hookspath=[],
     hooksconfig={},
