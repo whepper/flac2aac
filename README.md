@@ -257,6 +257,72 @@ For each album:
 
 ---
 
+## macOS GUI App
+
+A standalone double-click `.app` for macOS can be built with PyInstaller.
+No Python or FFmpeg installation is required on the target machine — everything
+is bundled inside `flac2aac.app`.
+
+### 1 — Clone the repository
+
+```bash
+git clone https://github.com/whepper/flac2aac.git
+cd flac2aac
+```
+
+### 2 — Create a virtual environment and install dependencies
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt -r requirements-gui.txt
+```
+
+### 3 — Get FFmpeg with libfdk_aac
+
+Homebrew's default FFmpeg omits libfdk_aac for licensing reasons.
+Install it from the community tap (this compiles from source, so it takes a few minutes):
+
+```bash
+brew tap homebrew-ffmpeg/ffmpeg
+brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-fdk-aac
+```
+
+### 4 — Copy FFmpeg into the `vendor/` directory
+
+```bash
+mkdir -p vendor
+cp "$(brew --prefix homebrew-ffmpeg/ffmpeg/ffmpeg)/bin/ffmpeg" vendor/ffmpeg
+xattr -d com.apple.quarantine vendor/ffmpeg 2>/dev/null || true
+```
+
+### 5 — Build the app
+
+```bash
+pyinstaller flac2aac_gui.spec
+```
+
+The finished app is at `dist/flac2aac.app`. Drag it to `/Applications` or
+double-click it directly — no terminal needed.
+
+> **Note:** The `.venv` must be active when running `pyinstaller` so it can
+> find all installed packages. If you open a new terminal session, run
+> `source .venv/bin/activate` again before building.
+
+### Running without building
+
+You can also run the GUI directly from the project directory (no PyInstaller needed):
+
+```bash
+source .venv/bin/activate
+python gui.py
+```
+
+In this case FFmpeg must be on your `PATH` (e.g. installed via Homebrew),
+or you can place a custom build at `vendor/ffmpeg` and the GUI will use it automatically.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
