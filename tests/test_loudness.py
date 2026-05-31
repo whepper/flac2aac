@@ -82,3 +82,35 @@ def test_fillers_are_fixed_across_gains(processor):
     ref = _split(processor._replaygain_to_soundcheck(0.0))[4:]
     for g in (-6.0, -18.0, -40.0, -70.0, 0.0, 10.0):
         assert _split(processor._replaygain_to_soundcheck(g))[4:] == ref
+
+
+def test_default_reference_is_identity(processor):
+    """reference_loudness=-18 (default) must produce the same output as
+    calling without the argument."""
+    assert (
+        processor._replaygain_to_soundcheck(-7.0)
+        == processor._replaygain_to_soundcheck(-7.0, -18.0)
+    )
+
+
+def test_reference_loudness_shifts_gain(processor):
+    """Targeting -14 LUFS shifts the effective gain by +4 dB vs -18 LUFS.
+
+    Higher sc value = louder track = less iTunes boost; lower sc = quieter track
+    = more iTunes boost. Targeting -14 LUFS (louder playback level) means
+    iTunes must boost more, so sc should be LOWER.
+    """
+    parts_18 = _split(processor._replaygain_to_soundcheck(0.0, -18.0))
+    parts_14 = _split(processor._replaygain_to_soundcheck(0.0, -14.0))
+    sc_18 = int(parts_18[0], 16)
+    sc_14 = int(parts_14[0], 16)
+    # Louder target → lower sc (iTunes applies more gain)
+    assert sc_14 < sc_18
+
+
+def test_reference_loudness_minus18_matches_legacy(processor):
+    """-18 LUFS reference must reproduce the known -18 dB result."""
+    out = processor._replaygain_to_soundcheck(-18.0, -18.0)
+    parts = _split(out)
+    assert parts[0] == parts[1] == "0000F678"
+    assert parts[2] == parts[3] == "0002682B"

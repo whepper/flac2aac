@@ -111,7 +111,11 @@ class Encoder:
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=10,
             )
+        except subprocess.TimeoutExpired:
+            logger.error(f"FFmpeg check timed out: {self.ffmpeg_bin}")
+            return False
         except (subprocess.CalledProcessError, FileNotFoundError):
             logger.error(f"FFmpeg not found at: {self.ffmpeg_bin}")
             return False

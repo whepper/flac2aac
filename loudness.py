@@ -30,6 +30,9 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
+# ReplayGain 2.0 / EBU R128 reference level that r128gain always targets.
+_RG2_REFERENCE_LUFS = -18.0
+
 
 class LoudnessProcessor:
     """Handles loudness analysis and tag writing."""
@@ -87,8 +90,8 @@ class LoudnessProcessor:
     def _add_replaygain_tags(self, m4a_files: List[Path]) -> None:
         """Add ReplayGain 2.0 tags using r128gain.
 
-        Note: r128gain uses a fixed reference of -18 LUFS (ReplayGain 2.0 standard).
-        The target_loudness config option is only used for iTunNORM calculation.
+        r128gain always targets -18 LUFS (ReplayGain 2.0 standard).
+        ``reference_loudness`` only shifts the iTunNORM value, not these tags.
 
         Args:
             m4a_files: List of M4A files
@@ -218,7 +221,9 @@ class LoudnessProcessor:
                     )
                     continue
 
-                itunnorm = self._replaygain_to_soundcheck(rg_gain)
+                itunnorm = self._replaygain_to_soundcheck(
+                    rg_gain, self.loudness_config.reference_loudness
+                )
                 itunnorm_key = '----:com.apple.iTunes:iTunNORM'
                 m4a[itunnorm_key] = [MP4FreeForm(itunnorm.encode('utf-8'))]
                 m4a.save()
@@ -266,7 +271,9 @@ class LoudnessProcessor:
             logger.warning(f"Failed to parse ReplayGain value from {key}: {e}")
             return None
     
-    def _replaygain_to_soundcheck(self, gain_db: float) -> str:
+    def _replaygain_to_soundcheck(
+        self, gain_db: float, reference_loudness: float = -18.0
+    ) -> str:
         """Convert ReplayGain dB to iTunes SoundCheck (iTunNORM) format.
 
         The string format expected by iTunes/Music.app:
@@ -280,13 +287,21 @@ class LoudnessProcessor:
         This matches what Mp3tag and foobar2000 produce when
         converting ReplayGain → iTunNORM.
 
+        ``reference_loudness`` shifts the target level independently of
+        the ReplayGain tags: at -18 LUFS (default) the value is
+        unchanged; at -14 LUFS the iTunNORM gain is 4 dB louder.
+
         Args:
-            gain_db: ReplayGain gain in dB.
+            gain_db: ReplayGain gain in dB (relative to -18 LUFS).
+            reference_loudness: Desired iTunNORM target in LUFS.
 
         Returns:
             iTunNORM hex string (with leading space).
         """
-        ratio = 10 ** (-gain_db / 10.0)
+        # Shift the effective gain to hit reference_loudness instead of
+        # the hardwired -18 LUFS that r128gain always tags against.
+        adjusted_gain = gain_db + (reference_loudness - _RG2_REFERENCE_LUFS)
+        ratio = 10 ** (-adjusted_gain / 10.0)
         sc_1000 = max(0, min(int(round(ratio * 1000)), 0xFFFFFFFE))
         sc_2500 = max(0, min(int(round(ratio * 2500)), 0xFFFFFFFE))
         return (
