@@ -33,9 +33,13 @@ logger = logging.getLogger(__name__)
 # a non-empty value wins — that's why ``date`` precedes ``year``.
 TAG_MAPPING = [
     ('title', '©nam'),
+    ('titlesort', 'sonm'),
     ('artist', '©ART'),
+    ('artistsort', 'soar'),
     ('albumartist', 'aART'),
+    ('albumartistsort', 'soaa'),
     ('album', '©alb'),
+    ('albumsort', 'soal'),
     ('date', '©day'),
     ('year', '©day'),
     ('tracknumber', 'trkn'),
@@ -43,9 +47,11 @@ TAG_MAPPING = [
     ('genre', '©gen'),
     ('comment', '©cmt'),
     ('composer', '©wrt'),
+    ('composersort', 'soco'),
     ('lyrics', '©lyr'),
     ('copyright', 'cprt'),
     ('grouping', '©grp'),
+    ('encoder', '©too'),
 ]
 
 # Integer atoms — mutagen expects ``list[int]`` here, not strings.
@@ -72,6 +78,11 @@ TAG_FREEFORM_MAPPING = [
     ('label', 'LABEL'),
     ('catalognumber', 'CATALOGNUMBER'),
     ('barcode', 'BARCODE'),
+    ('encoded_by', 'ENCODED-BY'),
+    ('encoding', 'ENCODING'),
+    ('media', 'MEDIA'),
+    ('asin', 'ASIN'),
+    ('ean', 'EAN'),
 ]
 
 _TRUTHY = {'1', 'true', 'yes', 'on'}
