@@ -338,6 +338,21 @@ class App(tk.Tk):
             messagebox.showerror("Configuration error", str(exc))
             return
 
+        # Warn if loudness options are enabled but r128gain isn't installed
+        if not dry_run and (self._rg_var.get() or self._sc_var.get()):
+            try:
+                import r128gain  # noqa: F401
+            except ImportError:
+                answer = messagebox.askyesno(
+                    "r128gain not installed",
+                    "ReplayGain / iTunes SoundCheck tagging requires the r128gain package, "
+                    "which is not installed in this environment.\n\n"
+                    "Install it with:\n  pip install r128gain\n\n"
+                    "Continue without loudness tagging?",
+                )
+                if not answer:
+                    return
+
         self._total_files = 0
         self._processed_files = 0
         self._progress.configure(mode="determinate", value=0, maximum=1)
