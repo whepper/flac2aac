@@ -74,6 +74,8 @@ class _ConversionWorker(threading.Thread):
 
     def run(self) -> None:
         root_logger = logging.getLogger()
+        prev_level = root_logger.level
+        root_logger.setLevel(self._config.processing.log_level)
         handler = _QueueLogHandler(self._queue)
         handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s", "%H:%M:%S"))
         root_logger.addHandler(handler)
@@ -89,6 +91,7 @@ class _ConversionWorker(threading.Thread):
             self._queue.put({"type": "error", "msg": str(exc)})
         finally:
             root_logger.removeHandler(handler)
+            root_logger.setLevel(prev_level)
 
 
 class App(tk.Tk):
@@ -108,6 +111,7 @@ class App(tk.Tk):
 
         self._build_ui()
         self._set_running(False)
+        self.after(100, self._poll_queue)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -244,6 +248,10 @@ class App(tk.Tk):
         size_mb = self._ramdisk_size_var.get()
         sectors = size_mb * 2048  # 512-byte sectors
         self._create_rd_btn.configure(state="disabled")
+        self._eject_rd_btn.configure(state="disabled")
+        self._progress.configure(mode="indeterminate")
+        self._progress.start(15)
+        self._progress_label.configure(text="Creating…")
         self._append_log(f"Creating {size_mb} MB RAM disk…")
 
         def _run() -> None:
@@ -267,10 +275,14 @@ class App(tk.Tk):
                 self._queue.put({"type": "ramdisk_error", "msg": err})
 
         threading.Thread(target=_run, daemon=True).start()
-        self.after(100, self._poll_queue)
 
     def _eject_ramdisk(self) -> None:
         path = self._workdir_var.get().strip() or "/Volumes/RAMDisk"
+        self._create_rd_btn.configure(state="disabled")
+        self._eject_rd_btn.configure(state="disabled")
+        self._progress.configure(mode="indeterminate")
+        self._progress.start(15)
+        self._progress_label.configure(text="Ejecting…")
         self._append_log(f"Ejecting {path}…")
 
         def _run() -> None:
@@ -286,7 +298,6 @@ class App(tk.Tk):
                 self._queue.put({"type": "ramdisk_error", "msg": err})
 
         threading.Thread(target=_run, daemon=True).start()
-        self.after(100, self._poll_queue)
 
     # ------------------------------------------------------------------
     # Config building
@@ -338,6 +349,21 @@ class App(tk.Tk):
             messagebox.showerror("Configuration error", str(exc))
             return
 
+        # Warn if loudness options are enabled but r128gain isn't installed
+        if not dry_run and (self._rg_var.get() or self._sc_var.get()):
+            try:
+                import r128gain  # noqa: F401
+            except ImportError:
+                answer = messagebox.askyesno(
+                    "r128gain not installed",
+                    "ReplayGain / iTunes SoundCheck tagging requires the r128gain package, "
+                    "which is not installed in this environment.\n\n"
+                    "Install it with:\n  pip install r128gain\n\n"
+                    "Continue without loudness tagging?",
+                )
+                if not answer:
+                    return
+
         self._total_files = 0
         self._processed_files = 0
         self._progress.configure(mode="determinate", value=0, maximum=1)
@@ -351,7 +377,6 @@ class App(tk.Tk):
         self._worker = _ConversionWorker(config, self._queue, self._cancel_event, dry_run=dry_run)
         self._set_running(True)
         self._worker.start()
-        self.after(100, self._poll_queue)
 
     def _on_cancel(self) -> None:
         if self._worker and self._worker.is_alive():
@@ -370,8 +395,7 @@ class App(tk.Tk):
         except queue.Empty:
             pass
 
-        if self._worker and self._worker.is_alive():
-            self.after(100, self._poll_queue)
+        self.after(100, self._poll_queue)
 
     def _handle_message(self, msg: dict) -> None:
         kind = msg.get("type")
@@ -421,16 +445,29 @@ class App(tk.Tk):
             mount = msg["path"]
             self._workdir_var.set(mount)
             self._append_log(f"RAM disk ready at {mount}")
+            self._progress.stop()
+            self._progress.configure(mode="determinate", value=0)
+            self._progress_label.configure(text="")
             self._create_rd_btn.configure(state="normal")
+            self._eject_rd_btn.configure(state="normal")
 
         elif kind == "ramdisk_ejected":
             self._append_log(f"RAM disk ejected: {msg['path']}")
             self._workdir_var.set("")
+            self._progress.stop()
+            self._progress.configure(mode="determinate", value=0)
+            self._progress_label.configure(text="")
+            self._create_rd_btn.configure(state="normal")
+            self._eject_rd_btn.configure(state="normal")
 
         elif kind == "ramdisk_error":
             self._append_log(f"RAM disk error: {msg['msg']}")
             messagebox.showerror("RAM disk error", msg["msg"])
+            self._progress.stop()
+            self._progress.configure(mode="determinate", value=0)
+            self._progress_label.configure(text="")
             self._create_rd_btn.configure(state="normal")
+            self._eject_rd_btn.configure(state="normal")
 
     # ------------------------------------------------------------------
     # Helpers
