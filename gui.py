@@ -483,6 +483,11 @@ class App(tk.Tk):
                 self._progress.configure(mode="indeterminate")
                 self._progress.start(15)
 
+            # Switch back to determinate when the next album's encoding starts
+            if "Encoding " in text and "track(s)" in text:
+                self._progress.stop()
+                self._progress.configure(mode="determinate", value=self._processed_files)
+
         elif kind == "done":
             stats: ProcessingStats = msg["stats"]
             self._progress.stop()
