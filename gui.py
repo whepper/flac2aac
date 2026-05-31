@@ -74,6 +74,8 @@ class _ConversionWorker(threading.Thread):
 
     def run(self) -> None:
         root_logger = logging.getLogger()
+        prev_level = root_logger.level
+        root_logger.setLevel(self._config.processing.log_level)
         handler = _QueueLogHandler(self._queue)
         handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s", "%H:%M:%S"))
         root_logger.addHandler(handler)
@@ -89,6 +91,7 @@ class _ConversionWorker(threading.Thread):
             self._queue.put({"type": "error", "msg": str(exc)})
         finally:
             root_logger.removeHandler(handler)
+            root_logger.setLevel(prev_level)
 
 
 class App(tk.Tk):
