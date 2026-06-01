@@ -41,6 +41,16 @@ def _bundled_ffmpeg() -> str:
     return "ffmpeg"
 
 
+def _bundled_rsgain() -> str:
+    """Return path to bundled rsgain, falling back to system 'rsgain'."""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        candidate = Path(base) / "bin" / "rsgain"
+        if candidate.exists():
+            return str(candidate)
+    return "rsgain"
+
+
 class _QueueLogHandler(logging.Handler):
     """Forwards log records to a queue for the UI to consume."""
 
@@ -75,9 +85,8 @@ class _ConversionWorker(threading.Thread):
     def run(self) -> None:
         import os
 
-        # r128gain spawns child processes that look up ffmpeg by name on PATH.
-        # Prepend the directory of the configured (or bundled) binary so every
-        # subprocess it spawns finds the right executable automatically.
+        # Prepend the bundled ffmpeg directory to PATH so any subprocess
+        # (rsgain, etc.) that shells out to ffmpeg finds the right binary.
         ffmpeg_bin = self._config.paths.ffmpeg_bin
         ffmpeg_dir = str(Path(ffmpeg_bin).parent.resolve())
         prev_path = os.environ.get("PATH", "")
@@ -372,6 +381,7 @@ class App(tk.Tk):
                 input_dir=input_dir,
                 output_dir=output_dir,
                 ffmpeg_bin=_bundled_ffmpeg(),
+                rsgain_bin=_bundled_rsgain(),
                 work_dir=work_dir,
             ),
             encoding=EncodingConfig(
