@@ -101,20 +101,24 @@ class LoudnessProcessor:
         ``reference_loudness`` only shifts the iTunNORM value, not these tags.
 
         Args:
-            m4a_files: List of M4A files
+            m4a_files: List of M4A files (must all be in the same directory)
         """
-        file_paths = [str(f) for f in m4a_files]
-        logger.debug(f"Running rsgain analysis on {len(file_paths)} file(s)")
+        album_dir = m4a_files[0].parent
+        logger.debug(f"Running rsgain on {len(m4a_files)} file(s) in {album_dir}")
 
         timeout = max(120, len(m4a_files) * 60)
         try:
-            subprocess.run(
-                [self.config.paths.rsgain_bin, "custom", "--album", *file_paths],
+            result = subprocess.run(
+                [self.config.paths.rsgain_bin, "easy", str(album_dir)],
                 capture_output=True,
                 text=True,
                 check=True,
                 timeout=timeout,
             )
+            if result.stdout:
+                logger.debug(f"rsgain stdout:\n{result.stdout.strip()}")
+            if result.stderr:
+                logger.debug(f"rsgain stderr:\n{result.stderr.strip()}")
         except subprocess.TimeoutExpired:
             logger.error(f"rsgain timed out after {timeout}s")
             return
