@@ -106,7 +106,7 @@ class LoudnessConfig:
     reference_loudness: float = -18.0
     # When True, and every source FLAC in an album already carries
     # REPLAYGAIN_TRACK_GAIN, those values are copied into the M4A
-    # instead of re-running r128gain. Big speed-up on pre-tagged
+    # instead of re-running rsgain. Big speed-up on pre-tagged
     # libraries; off by default to preserve existing behaviour.
     reuse_existing_replaygain: bool = False
 

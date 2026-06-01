@@ -79,12 +79,13 @@ class Pipeline:
         if not self.dry_run and not self.encoder.verify_ffmpeg():
             raise RuntimeError("FFmpeg with libfdk_aac not available")
 
-        # Verify rsgain availability when ReplayGain tagging is requested
-        # and the reuse-from-source fast path won't cover all files.
+        # Verify rsgain availability when ReplayGain tagging is requested.
+        # reuse_existing_replaygain is a best-effort fast path: if any source
+        # FLAC is untagged the pipeline falls back to calling rsgain, so the
+        # binary must be present regardless of that setting.
         if (
             not self.dry_run
             and self.config.loudness.enable_replaygain
-            and not self.config.loudness.reuse_existing_replaygain
             and not self.loudness_processor.verify_rsgain()
         ):
             raise RuntimeError(
