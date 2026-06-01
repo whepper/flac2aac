@@ -4,7 +4,7 @@ Handles ReplayGain 2.0 (EBU R128) and iTunes SoundCheck tag generation.
 """
 
 import logging
-import math
+import subprocess
 from pathlib import Path
 from typing import List, Dict, Iterable, Optional, Tuple
 
@@ -15,15 +15,6 @@ try:
 except ImportError:
     raise ImportError(
         "mutagen package required. Install with: pip install mutagen"
-    )
-
-try:
-    import r128gain
-except ImportError:
-    r128gain = None
-    logging.warning(
-        "r128gain not installed. ReplayGain tagging disabled. "
-        "Install with: pip install r128gain"
     )
 
 from config import Config
@@ -69,17 +60,13 @@ class LoudnessProcessor:
             if self.loudness_config.reuse_existing_replaygain and source_pairs:
                 reused = self._reuse_source_replaygain(source_pairs)
             if not reused:
-                if r128gain is None:
-                    logger.warning("r128gain not available, skipping ReplayGain")
-                else:
-                    self._add_replaygain_tags(m4a_files)
+                self._add_replaygain_tags(m4a_files)
 
         if self.loudness_config.enable_itunes_soundcheck:
             self._add_itunes_soundcheck(m4a_files)
     
-    # Possible locations r128gain (and earlier versions) may store ReplayGain
-    # track gain under. Used both for iTunNORM lookup and for post-processing
-    # verification that tags were actually written.
+    # Atom keys where rsgain (and r128gain before it) writes the track gain.
+    # Multiple casings are checked for compatibility with older files.
     _REPLAYGAIN_KEYS = (
         '----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN',
         '----:com.apple.iTunes:replaygain_track_gain',
@@ -87,39 +74,62 @@ class LoudnessProcessor:
         'replaygain_track_gain',
     )
 
-    def _add_replaygain_tags(self, m4a_files: List[Path]) -> None:
-        """Add ReplayGain 2.0 tags using r128gain.
+    def verify_rsgain(self) -> bool:
+        """Return True if the configured rsgain binary is available."""
+        try:
+            result = subprocess.run(
+                [self.config.paths.rsgain_bin, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return result.returncode == 0
+        except subprocess.TimeoutExpired:
+            logger.error(f"rsgain check timed out: {self.config.paths.rsgain_bin}")
+            return False
+        except FileNotFoundError:
+            logger.error(
+                f"rsgain binary not found: {self.config.paths.rsgain_bin}. "
+                "Install from https://github.com/complexlogic/rsgain"
+            )
+            return False
 
-        r128gain always targets -18 LUFS (ReplayGain 2.0 standard).
+    def _add_replaygain_tags(self, m4a_files: List[Path]) -> None:
+        """Add ReplayGain 2.0 tags using rsgain.
+
+        rsgain targets -18 LUFS (ReplayGain 2.0 standard).
         ``reference_loudness`` only shifts the iTunNORM value, not these tags.
 
         Args:
             m4a_files: List of M4A files
         """
         file_paths = [str(f) for f in m4a_files]
-        logger.debug(f"Running R128 analysis on {len(file_paths)} file(s)")
+        logger.debug(f"Running rsgain analysis on {len(file_paths)} file(s)")
 
+        timeout = max(120, len(m4a_files) * 60)
         try:
-            # r128gain uses fixed -18 LUFS reference (ReplayGain 2.0 standard)
-            # It does not accept target_loudness parameter
-            r128gain.process(
-                file_paths,
-                album_gain=True,
-                skip_tagged=False,
-                opus_output_gain=False,
-                ffmpeg_path=self.config.paths.ffmpeg_bin,
+            subprocess.run(
+                [self.config.paths.rsgain_bin, "custom", "--album", *file_paths],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=timeout,
             )
-        except Exception as e:
-            logger.error(f"Failed to add ReplayGain tags: {e}")
+        except subprocess.TimeoutExpired:
+            logger.error(f"rsgain timed out after {timeout}s")
+            return
+        except subprocess.CalledProcessError as e:
+            logger.error(f"rsgain failed: {e.stderr or e.stdout}")
+            return
+        except FileNotFoundError:
+            logger.error(f"rsgain binary not found: {self.config.paths.rsgain_bin}")
             return
 
-        # r128gain swallows many errors internally and returns without raising,
-        # so verify tags were actually written by re-reading the files.
         missing = [f for f in m4a_files if not self._has_replaygain(f)]
         if missing:
             logger.error(
                 f"ReplayGain tags missing on {len(missing)}/{len(m4a_files)} "
-                f"file(s) after r128gain run; first offender: {missing[0].name}"
+                f"file(s) after rsgain run; first offender: {missing[0].name}"
             )
         else:
             logger.info(f"Added ReplayGain tags to {len(m4a_files)} file(s)")
@@ -144,7 +154,7 @@ class LoudnessProcessor:
 
         Returns:
             True when RG tags were reused for the whole album, False
-            when the caller should fall back to r128gain.
+            when the caller should fall back to rsgain.
         """
         pair_list = list(pairs)
         extracted: List[Tuple[Path, Dict[str, str]]] = []
@@ -248,7 +258,7 @@ class LoudnessProcessor:
             return None
         
         try:
-            # r128gain stores values as MP4FreeForm bytes
+            # rsgain stores values as MP4FreeForm bytes
             value = m4a[key][0]
             
             # MP4FreeForm objects store data as bytes

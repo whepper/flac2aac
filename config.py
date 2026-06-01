@@ -41,6 +41,7 @@ class PathsConfig:
     input_dir: Path
     output_dir: Path
     ffmpeg_bin: str = "ffmpeg"
+    rsgain_bin: str = "rsgain"
     work_dir: Optional[Path] = None
 
     def __post_init__(self):
