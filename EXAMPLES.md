@@ -20,6 +20,7 @@
 input_dir  = "/Users/you/Music/FLAC"
 output_dir = "/Users/you/Music/AAC"
 ffmpeg_bin = "ffmpeg"
+rsgain_bin = "rsgain"
 ```
 
 ```bash
@@ -58,6 +59,7 @@ hdiutil detach /Volumes/RAMDisk
 input_dir  = "/Users/you/Music/FLAC"
 output_dir = "/Users/you/Music/AAC"
 ffmpeg_bin = "ffmpeg"
+rsgain_bin = "rsgain"
 work_dir   = "/Volumes/RAMDisk"
 ```
 
@@ -80,6 +82,7 @@ df -h /mnt/ramdisk
 input_dir  = "/mnt/flac"
 output_dir = "/mnt/nas/aac"
 ffmpeg_bin = "ffmpeg"
+rsgain_bin = "rsgain"
 work_dir   = "/mnt/ramdisk"
 ```
 
@@ -107,6 +110,7 @@ set to a local SSD or RAM disk the NAS only sees the final move:
 input_dir  = "/Volumes/NAS/Music/FLAC"
 output_dir = "/Volumes/NAS/Music/AAC"
 ffmpeg_bin = "ffmpeg"
+rsgain_bin = "rsgain"
 work_dir   = "/tmp/flac2aac_work"   # local SSD temp dir
 
 [processing]

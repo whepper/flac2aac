@@ -12,13 +12,14 @@ operation — minimising writes to spinning disks, NAS shares, or SSDs.
 
 ## Features
 
-- Parallel FLAC-to-AAC encoding via FFmpeg + libfdk_aac (VBR 1-5)
+- Parallel FLAC-to-AAC encoding via FFmpeg + libfdk_aac (VBR 1–5)
 - Full FLAC metadata → M4A tag mapping (title, artist, album, year, track, disc, …)
 - Extended tag pass-through: BPM, compilation, grouping, MusicBrainz IDs, ISRC, label, catalogue number, barcode
+- Sort fields: title sort, artist sort, album sort, album artist sort, composer sort
 - Embedded cover art copied to M4A files
 - Standalone `cover.jpg` copied/extracted per album
-- EBU R128 / ReplayGain 2.0 track & album gain tagging (via r128gain)
-- iTunes SoundCheck (iTunNORM) tag generation
+- EBU R128 / ReplayGain 2.0 track & album gain tagging (via **rsgain**)
+- iTunes SoundCheck (iTunNORM) tag generation with configurable loudness target
 - **Working directory support** — encode to RAM disk, move to output when done
 - Recursive directory scanning with mirrored output structure
 - Configurable via a single `config.toml` file
@@ -37,7 +38,8 @@ operation — minimising writes to spinning disks, NAS shares, or SSDs.
 
 **macOS (Homebrew)**
 ```bash
-brew install ffmpeg
+brew tap homebrew-ffmpeg/ffmpeg
+brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-fdk-aac
 ```
 
 **Ubuntu / Debian**
@@ -56,6 +58,34 @@ sudo apt update && sudo apt install ffmpeg
 ```bash
 yay -S ffmpeg-libfdk_aac
 ```
+
+### rsgain
+
+[rsgain](https://github.com/complexlogic/rsgain) is required for ReplayGain 2.0 analysis and tagging.
+It is a compiled system binary, not a Python package.
+
+**macOS (Homebrew)**
+```bash
+brew install rsgain
+```
+
+**Ubuntu / Debian**
+```bash
+sudo apt install rsgain
+```
+
+**Arch Linux**
+```bash
+sudo pacman -S rsgain
+```
+
+**Manual install** — download a pre-built binary from the
+[rsgain releases page](https://github.com/complexlogic/rsgain/releases) and
+place it on your `PATH`, or set `rsgain_bin` in `config.toml` to the full path.
+
+> If you don't need ReplayGain or iTunNORM tagging, set
+> `enable_replaygain = false` and `enable_itunes_soundcheck = false` in
+> `[loudness]` and rsgain is not required.
 
 ---
 
@@ -86,6 +116,7 @@ cp config.toml my_config.toml
 input_dir  = "/music/flac"
 output_dir = "/music/aac"
 ffmpeg_bin = "ffmpeg"
+rsgain_bin = "rsgain"
 ```
 
 ### With RAM disk working directory
@@ -98,6 +129,7 @@ only the final `shutil.move` writes to your output storage.
 input_dir  = "/music/flac"
 output_dir = "/music/aac"
 ffmpeg_bin = "ffmpeg"
+rsgain_bin = "rsgain"
 work_dir   = "/Volumes/RAMDisk"   # macOS example
 # work_dir = "/mnt/ramdisk"       # Linux example
 ```
@@ -182,6 +214,7 @@ python main.py --version
 | `input_dir` | *(required)* | FLAC source directory (scanned recursively) |
 | `output_dir` | *(required)* | AAC output root directory |
 | `ffmpeg_bin` | `"ffmpeg"` | Path to FFmpeg binary |
+| `rsgain_bin` | `"rsgain"` | Path to rsgain binary |
 | `work_dir` | *(disabled)* | Working directory for intermediate files (RAM disk recommended) |
 
 ### `[encoding]`
@@ -206,10 +239,10 @@ python main.py --version
 
 | Key | Default | Description |
 |---|---|---|
-| `enable_replaygain` | `true` | Write ReplayGain 2.0 tags |
+| `enable_replaygain` | `true` | Write ReplayGain 2.0 tags via rsgain |
 | `enable_itunes_soundcheck` | `true` | Write iTunes SoundCheck (iTunNORM) tag |
-| `reference_loudness` | `-18.0` | Target in LUFS (informational; r128gain uses −18 LUFS fixed) |
-| `reuse_existing_replaygain` | `false` | Skip loudness analysis when the source FLAC already has ReplayGain tags |
+| `reference_loudness` | `-18.0` | iTunNORM target in LUFS (does not affect ReplayGain tags, which always target −18 LUFS) |
+| `reuse_existing_replaygain` | `false` | Skip rsgain analysis when the source FLAC already has ReplayGain tags |
 
 ### `[processing]`
 
@@ -250,7 +283,7 @@ For each album:
   ├─ 1. Encode FLAC → M4A            (parallel, FFmpeg + libfdk_aac)
   ├─ 2. Copy FLAC metadata → M4A     (mutagen)
   ├─ 3. Copy / extract cover art     (Pillow)
-  ├─ 4. EBU R128 loudness analysis   (r128gain)
+  ├─ 4. EBU R128 loudness analysis   (rsgain)
   ├─ 5. Write ReplayGain + iTunNORM  (mutagen)
   └─ 6. Move album → output_dir      (shutil.move — one write per file)
 ```
@@ -260,8 +293,8 @@ For each album:
 ## macOS GUI App
 
 A standalone double-click `.app` for macOS can be built with PyInstaller.
-No Python or FFmpeg installation is required on the target machine — everything
-is bundled inside `flac2aac.app`.
+No Python, FFmpeg, or rsgain installation is required on the target machine —
+everything is bundled inside `flac2aac.app`.
 
 ### 1 — Clone the repository
 
@@ -278,16 +311,10 @@ source .venv/bin/activate
 pip install -r requirements.txt -r requirements-gui.txt
 ```
 
-> **Tip:** If `pip install -r requirements.txt` completes without error but ReplayGain
-> tagging still doesn't work, install `r128gain` explicitly:
-> ```bash
-> pip install r128gain
-> ```
-
 ### 3 — Get FFmpeg with libfdk_aac
 
 Homebrew's default FFmpeg omits libfdk_aac for licensing reasons.
-Install it from the community tap (this compiles from source, so it takes a few minutes):
+Install it from the community tap (compiles from source, takes a few minutes):
 
 ```bash
 brew tap homebrew-ffmpeg/ffmpeg
@@ -302,7 +329,19 @@ cp "$(brew --prefix homebrew-ffmpeg/ffmpeg/ffmpeg)/bin/ffmpeg" vendor/ffmpeg
 xattr -d com.apple.quarantine vendor/ffmpeg 2>/dev/null || true
 ```
 
-### 5 — Build the app
+### 5 — Get rsgain and copy it into `vendor/`
+
+```bash
+brew install rsgain
+mkdir -p vendor
+cp "$(brew --prefix rsgain)/bin/rsgain" vendor/rsgain
+xattr -d com.apple.quarantine vendor/rsgain 2>/dev/null || true
+```
+
+Alternatively, download a pre-built macOS binary directly from the
+[rsgain releases page](https://github.com/complexlogic/rsgain/releases).
+
+### 6 — Build the app
 
 ```bash
 pyinstaller flac2aac_gui.spec
@@ -331,8 +370,9 @@ source .venv/bin/activate
 python gui.py
 ```
 
-In this case FFmpeg must be on your `PATH` (e.g. installed via Homebrew),
-or you can place a custom build at `vendor/ffmpeg` and the GUI will use it automatically.
+FFmpeg and rsgain must both be on your `PATH` (e.g. installed via Homebrew),
+or you can place custom builds at `vendor/ffmpeg` and `vendor/rsgain` and
+the GUI will use them automatically.
 
 ---
 
