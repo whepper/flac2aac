@@ -66,15 +66,17 @@ def test_verify_rsgain_returns_false_when_exit_nonzero(tmp_path):
 
 # ── _add_replaygain_tags ─────────────────────────────────────────────────────
 
-def test_rsgain_called_with_album_flag(tmp_path):
+def test_rsgain_called_with_easy_and_album_dir(tmp_path):
     proc = _make_processor(tmp_path)
     calls = []
+    album_dir = tmp_path / "album"
+    album_dir.mkdir()
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-    files = [tmp_path / "a.m4a", tmp_path / "b.m4a"]
+    files = [album_dir / "a.m4a", album_dir / "b.m4a"]
     with patch("subprocess.run", side_effect=fake_run):
         with patch.object(proc, "_has_replaygain", return_value=True):
             proc._add_replaygain_tags(files)
@@ -82,10 +84,10 @@ def test_rsgain_called_with_album_flag(tmp_path):
     assert len(calls) == 1
     cmd = calls[0]
     assert cmd[0] == "rsgain"
-    assert "custom" in cmd
-    assert "--album" in cmd
-    assert str(files[0]) in cmd
-    assert str(files[1]) in cmd
+    assert cmd[1] == "easy"
+    assert cmd[2] == str(album_dir)
+    assert "custom" not in cmd
+    assert "--album" not in cmd
 
 
 def test_rsgain_timeout_scales_with_file_count(tmp_path):
