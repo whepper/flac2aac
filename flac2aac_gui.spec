@@ -4,51 +4,52 @@
 #   1. pip install -r requirements.txt -r requirements-gui.txt
 #   2. Place a libfdk_aac-enabled static FFmpeg build at vendor/ffmpeg (chmod +x)
 #      Remove Gatekeeper quarantine: xattr -d com.apple.quarantine vendor/ffmpeg
-#   3. Optionally place a 1024x1024 PNG at assets/flac2aac.png and generate the
+#   3. Place a static rsgain build at vendor/rsgain (chmod +x)
+#      Download from https://github.com/complexlogic/rsgain/releases
+#      Remove Gatekeeper quarantine: xattr -d com.apple.quarantine vendor/rsgain
+#   4. Optionally place a 1024x1024 PNG at assets/flac2aac.png and generate the
 #      .icns file: see assets/README or run `make icon` if provided.
 #
 # Build:
 #   pyinstaller flac2aac_gui.spec
 #
 # Output:
-#   dist/flac2aac.app  —  double-click to run, no Python or FFmpeg needed.
+#   dist/flac2aac.app  —  double-click to run, no Python, FFmpeg or rsgain needed.
 
 import os
 from pathlib import Path
 
 HERE = Path(SPECPATH)
 
-# Bundle FFmpeg binary if present at vendor/ffmpeg; otherwise warn.
-_ffmpeg_src = HERE / "vendor" / "ffmpeg"
-_binaries = []
-if _ffmpeg_src.exists():
-    _binaries = [(str(_ffmpeg_src), "bin")]  # must not be "." — conflicts with ffmpeg Python package
-else:
+
+def _vendor_binary(name):
+    """Return a PyInstaller binaries tuple for a file in vendor/, or warn if absent."""
+    src = HERE / "vendor" / name
+    if src.exists():
+        return (str(src), "bin")
     import warnings
     warnings.warn(
-        "vendor/ffmpeg not found — the app will require FFmpeg to be installed "
-        "separately (e.g. via Homebrew). Place a libfdk_aac-enabled static build "
-        "at vendor/ffmpeg to produce a fully self-contained bundle.",
+        f"vendor/{name} not found — the app will require {name} to be installed "
+        f"separately (e.g. via Homebrew). Place a static build at vendor/{name} "
+        f"to produce a fully self-contained bundle.",
         stacklevel=1,
     )
+    return None
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-r128gain_datas, r128gain_binaries, r128gain_hiddenimports = collect_all("r128gain")
+_binaries = [t for t in [_vendor_binary("ffmpeg"), _vendor_binary("rsgain")] if t]
+
+from PyInstaller.utils.hooks import collect_all
+
 mutagen_datas, mutagen_binaries, mutagen_hiddenimports = collect_all("mutagen")
-tqdm_datas, tqdm_binaries, tqdm_hiddenimports = collect_all("tqdm")
-platformdirs_datas, platformdirs_binaries, platformdirs_hiddenimports = collect_all("platformdirs")
 
 a = Analysis(
     [str(HERE / "gui.py")],
     pathex=[str(HERE)],
-    binaries=_binaries + r128gain_binaries + mutagen_binaries + tqdm_binaries + platformdirs_binaries,
-    datas=r128gain_datas + mutagen_datas + tqdm_datas + platformdirs_datas,
+    binaries=_binaries + mutagen_binaries,
+    datas=mutagen_datas,
     hiddenimports=(
-        r128gain_hiddenimports
-        + mutagen_hiddenimports
-        + tqdm_hiddenimports
-        + platformdirs_hiddenimports
+        mutagen_hiddenimports
         + [
             "PIL",
             "PIL.Image",

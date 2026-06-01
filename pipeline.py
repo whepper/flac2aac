@@ -79,6 +79,21 @@ class Pipeline:
         if not self.dry_run and not self.encoder.verify_ffmpeg():
             raise RuntimeError("FFmpeg with libfdk_aac not available")
 
+        # Verify rsgain availability when ReplayGain tagging is requested.
+        # reuse_existing_replaygain is a best-effort fast path: if any source
+        # FLAC is untagged the pipeline falls back to calling rsgain, so the
+        # binary must be present regardless of that setting.
+        if (
+            not self.dry_run
+            and self.config.loudness.enable_replaygain
+            and not self.loudness_processor.verify_rsgain()
+        ):
+            raise RuntimeError(
+                f"rsgain binary not available: {self.config.paths.rsgain_bin}. "
+                "Install from https://github.com/complexlogic/rsgain or set "
+                "[paths] rsgain_bin in config.toml"
+            )
+
         # Fail fast on obvious configuration problems before spending
         # time scanning the source tree.
         if not self.dry_run:

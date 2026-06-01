@@ -19,6 +19,12 @@ output_dir = "/music/aac"
 # Example: "/usr/local/bin/ffmpeg" or "C:\\ffmpeg\\bin\\ffmpeg.exe"
 ffmpeg_bin = "ffmpeg"
 
+# Path to rsgain binary (https://github.com/complexlogic/rsgain)
+# Used for ReplayGain 2.0 / EBU R128 loudness analysis and tagging
+# Use "rsgain" if it's on your system PATH, or provide full path
+# Install: brew install rsgain  /  apt install rsgain  /  download from GitHub
+rsgain_bin = "rsgain"
+
 # Working directory for intermediate files during processing
 # All encoding, tagging and loudness analysis is done here first;
 # finished albums are then moved to output_dir in one operation.

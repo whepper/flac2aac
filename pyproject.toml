@@ -11,10 +11,12 @@ license = { file = "LICENSE" }
 requires-python = ">=3.9"
 dependencies = [
     "mutagen>=1.47.0",
-    "r128gain>=1.0.7",
     "Pillow>=10.0.0",
     "tomli>=2.0.0; python_version < '3.11'",
 ]
+# ReplayGain analysis requires the rsgain system binary (not a Python package).
+# Install: brew install rsgain  /  apt install rsgain
+# https://github.com/complexlogic/rsgain
 
 [project.scripts]
 flac2aac = "main:main"
