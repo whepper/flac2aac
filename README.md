@@ -376,6 +376,14 @@ the GUI will use them automatically.
 
 ---
 
+## Note on AAC Patents
+
+This tool uses fdk-aac for encoding. fdk-aac is covered by patents related to
+AAC audio encoding. Distributing compiled binaries that include fdk-aac may
+require a patent license in some jurisdictions. Use at your own risk.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
