@@ -109,7 +109,10 @@ class Pipeline:
             return self.stats
 
         self.stats.total_files = len(file_pairs) + self.stats.skipped
-        logger.info(f"Found {self.stats.total_files} file(s) to process")
+        logger.info(
+            f"Found {len(file_pairs)} file(s) to process "
+            f"({self.stats.skipped} skipped)"
+        )
 
         if self.use_work_dir:
             logger.info(f"Working directory: {self.config.paths.work_dir}")

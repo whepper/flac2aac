@@ -4,7 +4,6 @@ Bundle with PyInstaller using flac2aac_gui.spec.
 """
 
 import logging
-import multiprocessing
 import queue
 import sys
 import threading
@@ -24,6 +23,7 @@ from config import (
     PathsConfig,
     ProcessingConfig,
 )
+from loudness import LoudnessProcessor
 from pipeline import Pipeline, ProcessingStats
 
 _APP_TITLE = "flac2aac"
@@ -415,23 +415,25 @@ class App(tk.Tk):
     def _on_run(self, dry_run: bool = False) -> None:
         try:
             config = self._build_config()
-        except (ConfigError, ValueError) as exc:
+        except (ConfigError, ValueError, tk.TclError) as exc:
             messagebox.showerror("Configuration error", str(exc))
             return
 
-        # Warn if loudness options are enabled but r128gain isn't installed
+        # Warn if loudness options are enabled but the rsgain binary is missing
         if not dry_run and (self._rg_var.get() or self._sc_var.get()):
-            try:
-                import r128gain  # noqa: F401
-            except Exception as _exc:
+            if not LoudnessProcessor(config).verify_rsgain():
                 answer = messagebox.askyesno(
-                    "r128gain not available",
-                    f"ReplayGain / iTunes SoundCheck tagging requires the r128gain package, "
-                    f"which could not be loaded ({_exc}).\n\n"
+                    "rsgain not available",
+                    f"ReplayGain / iTunes SoundCheck tagging requires the rsgain "
+                    f"binary, which was not found ({config.paths.rsgain_bin}).\n\n"
+                    f"Install it with 'brew install rsgain' or from "
+                    f"https://github.com/complexlogic/rsgain.\n\n"
                     f"Continue without loudness tagging?",
                 )
                 if not answer:
                     return
+                config.loudness.enable_replaygain = False
+                config.loudness.enable_itunes_soundcheck = False
 
         self._total_files = 0
         self._processed_files = 0
@@ -557,13 +559,12 @@ class App(tk.Tk):
         state = "disabled" if running else "normal"
         self._run_btn.configure(state=state)
         self._dryrun_btn.configure(state=state)
+        # RAM disk operations are unsafe while a conversion is using it.
+        self._create_rd_btn.configure(state=state)
+        self._eject_rd_btn.configure(state=state)
         self._cancel_btn.configure(state="normal" if running else "disabled")
 
 
 if __name__ == "__main__":
-    # 'fork' eliminates PyInstaller bootloader startup cost for every r128gain
-    # worker process. Safe here because no threads exist yet at this point.
-    multiprocessing.set_start_method("fork")
-    multiprocessing.freeze_support()
     app = App()
     app.mainloop()
