@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "flac2aac"
@@ -22,8 +22,21 @@ dependencies = [
 flac2aac = "main:main"
 
 [project.optional-dependencies]
-gui = ["customtkinter"]
+gui = ["pyinstaller>=6.0"]
 dev = ["pytest>=7", "pyinstaller"]
+
+[tool.setuptools]
+# Flat layout with multiple top-level modules; setuptools auto-discovery
+# cannot handle this, so list them explicitly.
+py-modules = [
+    "main",
+    "config",
+    "scanner",
+    "encoder",
+    "metadata",
+    "loudness",
+    "pipeline",
+]
 
 [tool.ruff]
 line-length = 100

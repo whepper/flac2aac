@@ -21,7 +21,7 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-# ReplayGain 2.0 / EBU R128 reference level that r128gain always targets.
+# ReplayGain 2.0 / EBU R128 reference level that rsgain always targets.
 _RG2_REFERENCE_LUFS = -18.0
 
 
@@ -154,7 +154,7 @@ class LoudnessProcessor:
 
         Runs only when every source carries at least a
         ``replaygain_track_gain`` value — partial coverage falls back
-        to a full r128 pass for predictability.
+        to a full rsgain pass for predictability.
 
         Returns:
             True when RG tags were reused for the whole album, False
@@ -249,7 +249,7 @@ class LoudnessProcessor:
     def _get_replaygain_value(self, m4a: MP4, key: str) -> Optional[float]:
         """Extract ReplayGain value from M4A freeform tags.
         
-        r128gain writes ReplayGain tags as MP4FreeForm objects.
+        rsgain writes ReplayGain tags as MP4FreeForm objects.
         
         Args:
             m4a: MP4 file object
@@ -277,7 +277,7 @@ class LoudnessProcessor:
             value_str = value_bytes.decode('utf-8').strip()
             
             # Parse "+X.XX dB" or "-X.XX dB" format
-            # r128gain format example: "-7.23 dB"
+            # rsgain format example: "-7.23 dB"
             gain_str = value_str.replace(' dB', '').replace('dB', '').strip()
             return float(gain_str)
         
@@ -313,7 +313,7 @@ class LoudnessProcessor:
             iTunNORM hex string (with leading space).
         """
         # Shift the effective gain to hit reference_loudness instead of
-        # the hardwired -18 LUFS that r128gain always tags against.
+        # the hardwired -18 LUFS that rsgain always tags against.
         adjusted_gain = gain_db + (reference_loudness - _RG2_REFERENCE_LUFS)
         ratio = 10 ** (-adjusted_gain / 10.0)
         sc_1000 = max(0, min(int(round(ratio * 1000)), 0xFFFFFFFE))

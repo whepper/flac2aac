@@ -277,3 +277,103 @@ def test_missing_extra_tags_leave_atoms_absent(handler, tmp_path):
         '----:com.apple.iTunes:ISRC',
     ]:
         assert atom not in m4a
+
+
+# --------------------------------------------------------------------
+# CoverManager: verbatim copy of conforming JPEGs, conversion of
+# non-JPEG embedded art
+# --------------------------------------------------------------------
+
+def _image_bytes(fmt: str, size=(100, 100)) -> bytes:
+    import io
+    from PIL import Image as PILImage
+
+    buf = io.BytesIO()
+    PILImage.new("RGB", size, (200, 30, 30)).save(buf, fmt)
+    return buf.getvalue()
+
+
+@pytest.fixture
+def cover_manager():
+    pytest.importorskip("PIL")
+    from metadata import CoverManager
+
+    cfg = Config(
+        paths=PathsConfig(input_dir=Path("/tmp"), output_dir=Path("/tmp")),
+        encoding=EncodingConfig(),
+        metadata=MetadataConfig(cover_file=CoverFileConfig(max_size=2000)),
+        loudness=LoudnessConfig(),
+        processing=ProcessingConfig(),
+    )
+    return CoverManager(cfg)
+
+
+def test_conforming_jpeg_copied_verbatim(cover_manager, tmp_path):
+    """An already-JPEG cover within max_size must not be re-encoded."""
+    source = tmp_path / "src" / "cover.jpg"
+    source.parent.mkdir()
+    source.write_bytes(_image_bytes("JPEG"))
+    dest_dir = tmp_path / "dest"
+
+    cover_manager._copy_cover_file(source, dest_dir)
+
+    assert (dest_dir / "cover.jpg").read_bytes() == source.read_bytes()
+
+
+def test_oversized_jpeg_is_resized(cover_manager, tmp_path):
+    from PIL import Image as PILImage
+
+    source = tmp_path / "src" / "cover.jpg"
+    source.parent.mkdir()
+    source.write_bytes(_image_bytes("JPEG", size=(3000, 1000)))
+    dest_dir = tmp_path / "dest"
+
+    cover_manager._copy_cover_file(source, dest_dir)
+
+    with PILImage.open(dest_dir / "cover.jpg") as img:
+        assert img.format == "JPEG"
+        assert max(img.size) <= 2000
+
+
+def _write_flac_with_picture(path: Path, mime: str, data: bytes) -> None:
+    from mutagen.flac import Picture
+
+    _write_empty_flac(path)
+    flac = FLAC(path)
+    pic = Picture()
+    pic.type = 3
+    pic.mime = mime
+    pic.data = data
+    flac.add_picture(pic)
+    flac.save()
+
+
+def test_extracted_png_art_converted_to_jpeg(cover_manager, tmp_path):
+    """PNG embedded art must come out as real JPEG data (the fallback
+    file is named cover.jpg)."""
+    from PIL import Image as PILImage
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    _write_flac_with_picture(
+        source_dir / "track.flac", "image/png", _image_bytes("PNG")
+    )
+    dest_dir = tmp_path / "dest"
+
+    cover_manager.handle_cover_file(source_dir, dest_dir)
+
+    with PILImage.open(dest_dir / "cover.jpg") as img:
+        assert img.format == "JPEG"
+
+
+def test_extracted_jpeg_art_written_verbatim(cover_manager, tmp_path):
+    """Conforming embedded JPEG art is written byte-for-byte."""
+    jpeg_data = _image_bytes("JPEG")
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    _write_flac_with_picture(source_dir / "track.flac", "image/jpeg", jpeg_data)
+    dest_dir = tmp_path / "dest"
+
+    cover_manager.handle_cover_file(source_dir, dest_dir)
+
+    assert (dest_dir / "cover.jpg").read_bytes() == jpeg_data

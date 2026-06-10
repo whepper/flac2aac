@@ -103,7 +103,7 @@ enable_itunes_soundcheck = true
 
 # iTunNORM (SoundCheck) target loudness in LUFS.
 # This shifts the iTunNORM gain value written into each M4A.
-# It does NOT affect the ReplayGain tags (r128gain always targets
+# It does NOT affect the ReplayGain tags (rsgain always targets
 # -18 LUFS per the ReplayGain 2.0 / EBU R128 standard).
 #
 # -18.0 LUFS: iTunes/Apple Music default (recommended)
@@ -113,7 +113,7 @@ reference_loudness = -18.0
 
 # When true and every source FLAC in an album already has
 # REPLAYGAIN_TRACK_GAIN tagged, those values are copied straight to
-# the output and the (slow) r128gain pass is skipped. Leave false
+# the output and the (slow) rsgain pass is skipped. Leave false
 # if you want the converter to always re-analyse from the audio.
 reuse_existing_replaygain = false
 

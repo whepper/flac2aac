@@ -244,6 +244,13 @@ python main.py --version
 | `reference_loudness` | `-18.0` | iTunNORM target in LUFS (does not affect ReplayGain tags, which always target −18 LUFS) |
 | `reuse_existing_replaygain` | `false` | Skip rsgain analysis when the source FLAC already has ReplayGain tags |
 
+> **Note on partial re-runs:** with `overwrite_existing = false`, a re-run
+> encodes only the tracks missing from the output, and ReplayGain *album*
+> gain is then computed over just those newly encoded tracks. If accurate
+> album gain matters after a partial conversion, set
+> `overwrite_existing = true` for that run (or delete the album's output
+> folder) so the whole album is analysed together.
+
 ### `[processing]`
 
 | Key | Default | Description |

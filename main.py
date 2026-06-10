@@ -11,7 +11,11 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
-from __init__ import __version__
+try:
+    from __init__ import __version__  # script-style execution from the repo dir
+except ImportError:  # installed console script (pyproject entry point)
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("flac2aac")
 from config import (
     VALID_LOG_LEVELS,
     Config,

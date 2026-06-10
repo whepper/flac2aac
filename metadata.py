@@ -3,6 +3,7 @@
 Handles tag mapping, cover art extraction and embedding.
 """
 
+import io
 import logging
 import shutil
 from pathlib import Path
@@ -333,8 +334,18 @@ class CoverManager:
         cover = next((p for p in flac.pictures if p.type == 3), flac.pictures[0])
 
         try:
-            with open(dest_path, 'wb') as f:
-                f.write(cover.data)
+            buffer = io.BytesIO(cover.data)
+            if Image and self._needs_processing(buffer):
+                # Non-JPEG art (fallback_name implies .jpg) or oversized —
+                # convert/resize instead of dumping mismatched raw bytes.
+                self._process_and_save(buffer, dest_path)
+            else:
+                if Image is None and cover.mime != 'image/jpeg':
+                    logger.warning(
+                        f"Embedded art is {cover.mime} and Pillow is unavailable; "
+                        f"writing raw bytes to {dest_path.name}"
+                    )
+                dest_path.write_bytes(cover.data)
         except OSError as e:
             logger.warning(f"Failed to write extracted cover to {dest_path}: {e}")
             return None
@@ -357,19 +368,40 @@ class CoverManager:
             logger.debug(f"Cover file already exists: {dest_path.name}")
             return
         
-        # Process image if needed
-        if Image and self.cover_config.max_size > 0:
+        # Re-encode only when actually needed; conforming JPEGs are
+        # copied verbatim to avoid generation loss on every run.
+        if Image and self._needs_processing(source):
             self._process_and_save(source, dest_path)
         else:
             shutil.copy2(source, dest_path)
-        
+
         logger.info(f"Copied cover: {dest_path.name}")
-    
-    def _process_and_save(self, source: Path, dest: Path) -> None:
-        """Process image (resize, convert) and save.
-        
+
+    def _needs_processing(self, source) -> bool:
+        """Return True when the image must be re-encoded: non-JPEG data
+        (cover files are saved under .jpg names) or larger than max_size.
+
         Args:
-            source: Source image file
+            source: Image file path or binary file-like object
+        """
+        try:
+            with Image.open(source) as img:
+                if img.format != 'JPEG':
+                    return True
+                max_size = self.cover_config.max_size
+                return max_size > 0 and max(img.size) > max_size
+        except OSError:
+            # Not decodable as an image — let the caller copy it as-is.
+            return False
+        finally:
+            if hasattr(source, 'seek'):
+                source.seek(0)
+
+    def _process_and_save(self, source, dest: Path) -> None:
+        """Process image (resize, convert) and save.
+
+        Args:
+            source: Source image file path or binary file-like object
             dest: Destination image file
         """
         try:
@@ -396,4 +428,8 @@ class CoverManager:
 
         except (OSError, ValueError) as e:
             logger.warning(f"Failed to process image, copying as-is: {e}")
-            shutil.copy2(source, dest)
+            if hasattr(source, 'seek'):
+                source.seek(0)
+                dest.write_bytes(source.read())
+            else:
+                shutil.copy2(source, dest)
