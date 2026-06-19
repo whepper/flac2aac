@@ -303,6 +303,22 @@ A standalone double-click `.app` for macOS can be built with PyInstaller.
 No Python, FFmpeg, or rsgain installation is required on the target machine —
 everything is bundled inside `flac2aac.app`.
 
+### Runtime UI
+
+During a run the GUI shows three signals:
+
+- a **progress bar** that tracks the total number of encoded files.
+  It only ever moves right — long-running phases like ReplayGain
+  analysis and album moves do not reset the bar to zero.
+- an **activity label** below the bar with the current phase
+  (`Encoding album 3 / 12 — track 5 / 10`,
+  `Analysing loudness — album 3 / 12`, `Moving album to output`).
+- a **log** of every pipeline message, capped at the most recent
+  5000 lines so a long run cannot grow it without bound.
+
+The RAM disk create/eject buttons use the indeterminate bar style
+because their duration is unknown up front.
+
 ### 1 — Clone the repository
 
 ```bash
