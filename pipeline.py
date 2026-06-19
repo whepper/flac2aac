@@ -14,7 +14,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import Callable, List, Dict, Optional, Tuple
 
 from config import Config
 from encoder import Encoder, EncodingError
@@ -23,6 +23,15 @@ from metadata import MetadataHandler, CoverManager
 from scanner import Scanner
 
 logger = logging.getLogger(__name__)
+
+
+# Phase identifiers used in ProgressEvent. Kept as plain strings so the
+# GUI can switch on them without importing the dataclass.
+PHASE_SCANNING = "scanning"
+PHASE_READY = "ready"
+PHASE_ENCODING = "encoding"
+PHASE_LOUDNESS = "loudness"
+PHASE_MOVING = "moving"
 
 
 @dataclass
@@ -36,6 +45,27 @@ class ProcessingStats:
     albums_failed: int = 0
 
 
+@dataclass
+class ProgressEvent:
+    """Structured progress notification emitted by the pipeline.
+
+    All counters are 0-based where applicable. ``files_done`` is a
+    monotonically increasing grand total of files that have completed
+    encoding, which the GUI uses to drive a progress bar that only
+    ever moves right.
+    """
+    phase: str
+    album_index: int = 0
+    album_total: int = 0
+    track_index: int = 0
+    track_total: int = 0
+    files_done: int = 0
+    files_total: int = 0
+
+
+ProgressCallback = Callable[[ProgressEvent], None]
+
+
 class Pipeline:
     """Main processing pipeline."""
 
@@ -44,6 +74,7 @@ class Pipeline:
         config: Config,
         dry_run: bool = False,
         cancel_event: Optional[threading.Event] = None,
+        progress_callback: Optional[ProgressCallback] = None,
     ):
         """Initialize pipeline.
 
@@ -51,10 +82,16 @@ class Pipeline:
             config: Application configuration
             dry_run: If True, only scan and report without processing
             cancel_event: Optional event; when set the album loop stops cleanly
+            progress_callback: Optional callable receiving :class:`ProgressEvent`
+                notifications as the pipeline advances. Exceptions raised by
+                the callback are logged and swallowed so they cannot break
+                the run. When ``None`` (the default, used by the CLI) no
+                events are emitted.
         """
         self.config = config
         self.dry_run = dry_run
         self.cancel_event = cancel_event
+        self.progress_callback = progress_callback
         self.use_work_dir = (
             config.paths.work_dir is not None
             and str(config.paths.work_dir).strip() != ""
@@ -100,13 +137,10 @@ class Pipeline:
             self._validate_paths()
 
         # Scan for files
+        self._emit_progress(ProgressEvent(phase=PHASE_SCANNING))
         logger.info("Scanning for FLAC files...")
         file_pairs = list(self.scanner.scan())
         self.stats.skipped = self.scanner.skipped
-
-        if not file_pairs and self.stats.skipped == 0:
-            logger.warning("No FLAC files found to process")
-            return self.stats
 
         self.stats.total_files = len(file_pairs) + self.stats.skipped
         logger.info(
@@ -125,26 +159,66 @@ class Pipeline:
 
         # Group files by album directory
         album_groups = self._group_by_album(file_pairs)
-        logger.info(f"Organised into {len(album_groups)} album(s)")
+        album_total = len(album_groups)
+        logger.info(f"Organised into {album_total} album(s)")
+
+        # Single "ready" event with the full picture (album count and
+        # file count). The UI uses this to switch the bar from
+        # indeterminate to determinate and to size it against the real
+        # total. Emitted even in the no-files case so the UI gets a
+        # clean "Starting…" → "Done." sequence.
+        self._emit_progress(ProgressEvent(
+            phase=PHASE_READY,
+            album_total=album_total,
+            files_done=0,
+            files_total=self.stats.total_files,
+        ))
+
+        if not file_pairs and self.stats.skipped == 0:
+            logger.warning("No FLAC files found to process")
+            return self.stats
 
         # Process each album. One album failing shouldn't take down
         # the whole library pass — log the error, count it, and move
         # on. The per-album cleanup inside _process_album already
         # takes care of work_dir state.
-        for album_dir, files in album_groups.items():
+        files_done = 0
+        for album_index, (album_dir, files) in enumerate(album_groups.items()):
             if self.cancel_event and self.cancel_event.is_set():
                 logger.info("Conversion cancelled by user.")
                 break
             logger.info(f"\nProcessing album: {album_dir}")
             try:
-                self._process_album(files)
+                files_done = self._process_album(
+                    files,
+                    album_index=album_index,
+                    album_total=album_total,
+                    files_done=files_done,
+                )
             except Exception as exc:
                 logger.error(f"  Album failed, continuing: {album_dir}: {exc}")
                 self.stats.albums_failed += 1
+                # Even on failure, advance the counter so the bar keeps
+                # moving right — the user still wants to see overall
+                # progress through the library.
+                files_done += len(files)
                 continue
             self.stats.albums_processed += 1
 
         return self.stats
+
+    def _emit_progress(self, event: ProgressEvent) -> None:
+        """Forward a progress event to the callback, if one was supplied.
+
+        Exceptions in the callback are caught and logged so a buggy UI
+        hook cannot abort a long-running encode.
+        """
+        if not self.progress_callback:
+            return
+        try:
+            self.progress_callback(event)
+        except Exception:
+            logger.exception("Progress callback raised; ignoring.")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -159,7 +233,13 @@ class Pipeline:
             groups[source.parent].append((source, dest))
         return dict(groups)
 
-    def _process_album(self, file_pairs: List[Tuple[Path, Path]]) -> None:
+    def _process_album(
+        self,
+        file_pairs: List[Tuple[Path, Path]],
+        album_index: int = 0,
+        album_total: int = 0,
+        files_done: int = 0,
+    ) -> int:
         """Process all files in one album.
 
         When work_dir is enabled:
@@ -172,9 +252,15 @@ class Pipeline:
 
         When work_dir is disabled the same steps run directly in
         output_dir (original behaviour).
+
+        Returns:
+            Updated ``files_done`` count after this album has been
+            processed (or attempted), used by the caller to keep the
+            progress bar monotonic.
         """
         source_album_dir = file_pairs[0][0].parent
         final_album_dir = file_pairs[0][1].parent
+        track_total = len(file_pairs)
 
         if self.use_work_dir:
             work_album_dir = self._make_work_album_dir(final_album_dir)
@@ -183,23 +269,43 @@ class Pipeline:
             work_album_dir = final_album_dir
 
         try:
-            # Phase 1 & 2: Encode + copy metadata (parallel)
-            logger.info(f"  Encoding {len(file_pairs)} track(s)...")
+            # Phase 1 & 2: Encode + copy metadata (parallel).
+            # _encode_album emits its own per-track progress events;
+            # we just pass the album context through.
+            logger.info(f"  Encoding {track_total} track(s)...")
             encoded_pairs = self._encode_album(
-                file_pairs, source_album_dir, work_album_dir
+                file_pairs,
+                source_album_dir,
+                work_album_dir,
+                album_index=album_index,
+                album_total=album_total,
+                track_total=track_total,
+                files_done=files_done,
             )
 
             if not encoded_pairs:
                 logger.warning("  No files successfully encoded in this album")
-                return
+                return files_done + track_total
 
             work_dest_files = [dest for _, dest in encoded_pairs]
+            files_done += len(encoded_pairs)
 
             # Phase 3: Cover art
             logger.info("  Processing cover art...")
             self.cover_manager.handle_cover_file(source_album_dir, work_album_dir)
 
-            # Phase 4 & 5: Loudness analysis + iTunNORM
+            # Phase 4 & 5: Loudness analysis + iTunNORM. The bar holds
+            # at the post-encode value here — the user just sees a
+            # "Analysing loudness" message in the activity label.
+            self._emit_progress(ProgressEvent(
+                phase=PHASE_LOUDNESS,
+                album_index=album_index,
+                album_total=album_total,
+                track_index=track_total,
+                track_total=track_total,
+                files_done=files_done,
+                files_total=self.stats.total_files,
+            ))
             logger.info("  Analysing loudness and adding tags...")
             self.loudness_processor.process_album(
                 work_dest_files, source_pairs=encoded_pairs
@@ -207,7 +313,18 @@ class Pipeline:
 
             # Phase 6: Move finished album to output_dir
             if self.use_work_dir:
+                self._emit_progress(ProgressEvent(
+                    phase=PHASE_MOVING,
+                    album_index=album_index,
+                    album_total=album_total,
+                    track_index=track_total,
+                    track_total=track_total,
+                    files_done=files_done,
+                    files_total=self.stats.total_files,
+                ))
                 self._move_album_to_output(work_album_dir, final_album_dir)
+
+            return files_done
 
         except Exception:
             # On failure clean up the work directory so no half-finished
@@ -222,6 +339,10 @@ class Pipeline:
         file_pairs: List[Tuple[Path, Path]],
         source_album_dir: Path,
         work_album_dir: Path,
+        album_index: int = 0,
+        album_total: int = 0,
+        track_total: int = 0,
+        files_done: int = 0,
     ) -> List[Tuple[Path, Path]]:
         """Encode all tracks for one album into work_album_dir.
 
@@ -229,6 +350,11 @@ class Pipeline:
         successfully encoded — the source paths are kept alongside so
         downstream stages (cover art, RG reuse) can look up metadata
         on the original FLAC without re-deriving it.
+
+        Emits a ``PHASE_ENCODING`` progress event for every completed
+        track (success or failure) so the GUI can advance its bar in
+        real time. ``files_done`` is incremented in lockstep with the
+        GUI's monotonic counter.
         """
         work_file_pairs: List[Tuple[Path, Path]] = []
         for source, final_dest in file_pairs:
@@ -237,6 +363,7 @@ class Pipeline:
             work_file_pairs.append((source, work_dest))
 
         encoded_pairs: List[Tuple[Path, Path]] = []
+        track_done = 0
 
         with ThreadPoolExecutor(max_workers=self.config.processing.workers) as executor:
             futures = {
@@ -254,6 +381,16 @@ class Pipeline:
                 except Exception as exc:
                     logger.error(f"  Unexpected error processing {src.name}: {exc}")
                     self.stats.failed += 1
+                track_done += 1
+                self._emit_progress(ProgressEvent(
+                    phase=PHASE_ENCODING,
+                    album_index=album_index,
+                    album_total=album_total,
+                    track_index=track_done,
+                    track_total=track_total,
+                    files_done=files_done + track_done,
+                    files_total=self.stats.total_files,
+                ))
 
         return encoded_pairs
 

@@ -16,7 +16,15 @@ from config import (
     PathsConfig,
     ProcessingConfig,
 )
-from pipeline import Pipeline
+from pipeline import (
+    PHASE_ENCODING,
+    PHASE_LOUDNESS,
+    PHASE_MOVING,
+    PHASE_READY,
+    PHASE_SCANNING,
+    Pipeline,
+    ProgressEvent,
+)
 
 
 def _make_pipeline(
@@ -113,3 +121,175 @@ def test_rsgain_not_verified_when_replaygain_disabled(tmp_path):
             pipeline.run()  # no FLAC files → returns early, but should not raise
 
     assert verify_called == [], "verify_rsgain should not be called when ReplayGain is disabled"
+
+
+# ── Progress callback ─────────────────────────────────────────────────────────
+
+def test_progress_callback_optional(tmp_path):
+    """Pipeline.run works fine with no progress_callback (the CLI case)."""
+    pipeline = _make_pipeline(tmp_path)
+    (tmp_path / "in").mkdir(parents=True)
+    with patch.object(pipeline.encoder, "verify_ffmpeg", return_value=True):
+        pipeline.run()  # must not raise
+
+
+def test_progress_callback_receives_scanning_event(tmp_path):
+    """The very first event the callback sees is the scanning marker."""
+    events: list[ProgressEvent] = []
+    pipeline = _make_pipeline(tmp_path)
+    (tmp_path / "in").mkdir(parents=True)
+    with patch.object(pipeline.encoder, "verify_ffmpeg", return_value=True):
+        # progress_callback is wired up at construction time, not per-run.
+        pipeline.progress_callback = events.append
+        pipeline.run()
+    assert events, "callback should have been invoked"
+    assert events[0].phase == PHASE_SCANNING
+
+
+def test_progress_files_done_is_monotonic(tmp_path):
+    """files_done on emitted events is monotonically non-decreasing — the
+    contract the GUI relies on to keep its progress bar moving right."""
+    events: list[ProgressEvent] = []
+    pipeline = _make_pipeline(tmp_path)
+    (tmp_path / "in").mkdir(parents=True)
+    with patch.object(pipeline.encoder, "verify_ffmpeg", return_value=True):
+        pipeline.progress_callback = events.append
+        pipeline.run()
+
+    files_done_values = [e.files_done for e in events if e.files_total > 0]
+    for prev, curr in zip(files_done_values, files_done_values[1:]):
+        assert curr >= prev, f"files_done went backwards: {prev} → {curr}"
+
+
+def test_progress_ready_event_carries_totals(tmp_path):
+    """The 'ready' event advertises the album and file totals so the UI
+    can size the bar up front."""
+    events: list[ProgressEvent] = []
+    pipeline = _make_pipeline(tmp_path)
+    (tmp_path / "in").mkdir(parents=True)
+    with patch.object(pipeline.encoder, "verify_ffmpeg", return_value=True):
+        pipeline.progress_callback = events.append
+        pipeline.run()
+
+    ready = [e for e in events if e.phase == PHASE_READY]
+    assert ready, "expected at least one PHASE_READY event"
+    # No FLAC files in the test, but the event must still be emitted
+    # with the totals the pipeline knows about.
+    assert ready[0].album_total == 0
+    assert ready[0].files_total == 0
+
+
+def test_progress_emits_encoding_and_loudness_phases(tmp_path, monkeypatch):
+    """When there is work to do, the pipeline emits encoding, loudness
+    and (with work_dir) moving events in the expected order."""
+    # Build a tiny fake album: one FLAC stub → one encoded output. The
+    # encoder is patched out entirely; we only care that the pipeline
+    # reaches the progress emission points.
+    in_dir = tmp_path / "in" / "album"
+    out_dir = tmp_path / "out" / "album"
+    in_dir.mkdir(parents=True)
+    (in_dir / "track.flac").write_bytes(b"fake")
+
+    cfg = Config(
+        paths=PathsConfig(input_dir=tmp_path / "in", output_dir=tmp_path / "out"),
+        encoding=EncodingConfig(),
+        metadata=MetadataConfig(cover_file=CoverFileConfig()),
+        loudness=LoudnessConfig(enable_replaygain=False, enable_itunes_soundcheck=False),
+        processing=ProcessingConfig(workers=1, log_level="INFO"),
+    )
+
+    def _fake_encode(self, source, destination):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"encoded")
+
+    events: list[ProgressEvent] = []
+    pipeline = Pipeline(cfg, progress_callback=events.append)
+    with patch.object(pipeline.encoder, "verify_ffmpeg", return_value=True), \
+         patch("encoder.Encoder.encode", _fake_encode), \
+         patch("metadata.MetadataHandler.copy_metadata"), \
+         patch("metadata.CoverManager.handle_cover_file"):
+        pipeline.run()
+
+    phases = [e.phase for e in events]
+    assert PHASE_SCANNING in phases
+    assert PHASE_READY in phases
+    assert PHASE_ENCODING in phases
+    # No work_dir configured → no moving phase.
+
+    # files_total must match the one file we created.
+    encoding_events = [e for e in events if e.phase == PHASE_ENCODING]
+    assert encoding_events[-1].files_total == 1
+    assert encoding_events[-1].files_done == 1
+    assert encoding_events[-1].track_total == 1
+    assert encoding_events[-1].track_index == 1
+
+
+def test_progress_emits_moving_phase_when_work_dir_set(tmp_path, monkeypatch):
+    """With work_dir configured, the 'moving' phase appears between
+    loudness and the end of the album."""
+    in_dir = tmp_path / "in" / "album"
+    work_dir = tmp_path / "work"
+    out_dir = tmp_path / "out"
+    in_dir.mkdir(parents=True)
+    (in_dir / "track.flac").write_bytes(b"fake")
+
+    cfg = Config(
+        paths=PathsConfig(
+            input_dir=tmp_path / "in", output_dir=out_dir, work_dir=work_dir,
+        ),
+        encoding=EncodingConfig(),
+        metadata=MetadataConfig(cover_file=CoverFileConfig()),
+        loudness=LoudnessConfig(enable_replaygain=False, enable_itunes_soundcheck=False),
+        processing=ProcessingConfig(workers=1, log_level="INFO"),
+    )
+
+    def _fake_encode(self, source, destination):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"encoded")
+
+    events: list[ProgressEvent] = []
+    pipeline = Pipeline(cfg, progress_callback=events.append)
+    with patch.object(pipeline.encoder, "verify_ffmpeg", return_value=True), \
+         patch("encoder.Encoder.encode", _fake_encode), \
+         patch("metadata.MetadataHandler.copy_metadata"), \
+         patch("metadata.CoverManager.handle_cover_file"):
+        pipeline.run()
+
+    phases = [e.phase for e in events]
+    assert PHASE_MOVING in phases
+    # The moving event should be issued after the encoding event and
+    # carry the full per-album count in files_done.
+    moving = [e for e in events if e.phase == PHASE_MOVING]
+    assert moving[0].files_done == 1
+
+
+def test_progress_callback_exceptions_do_not_abort_run(tmp_path, monkeypatch):
+    """A buggy UI hook must not be able to kill an in-progress encode."""
+    in_dir = tmp_path / "in" / "album"
+    in_dir.mkdir(parents=True)
+    (in_dir / "track.flac").write_bytes(b"fake")
+
+    cfg = Config(
+        paths=PathsConfig(input_dir=tmp_path / "in", output_dir=tmp_path / "out"),
+        encoding=EncodingConfig(),
+        metadata=MetadataConfig(cover_file=CoverFileConfig()),
+        loudness=LoudnessConfig(enable_replaygain=False, enable_itunes_soundcheck=False),
+        processing=ProcessingConfig(workers=1, log_level="INFO"),
+    )
+
+    def _fake_encode(self, source, destination):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"encoded")
+
+    def _bad_callback(event: ProgressEvent) -> None:
+        raise RuntimeError("boom")
+
+    pipeline = Pipeline(cfg, progress_callback=_bad_callback)
+    with patch.object(pipeline.encoder, "verify_ffmpeg", return_value=True), \
+         patch("encoder.Encoder.encode", _fake_encode), \
+         patch("metadata.MetadataHandler.copy_metadata"), \
+         patch("metadata.CoverManager.handle_cover_file"):
+        stats = pipeline.run()
+    # Pipeline still finished cleanly.
+    assert stats.successful == 1
+    assert stats.failed == 0

@@ -24,11 +24,24 @@ from config import (
     ProcessingConfig,
 )
 from loudness import LoudnessProcessor
-from pipeline import Pipeline, ProcessingStats
+from pipeline import (
+    PHASE_ENCODING,
+    PHASE_LOUDNESS,
+    PHASE_MOVING,
+    PHASE_READY,
+    PHASE_SCANNING,
+    Pipeline,
+    ProcessingStats,
+    ProgressEvent,
+)
 
 _APP_TITLE = "flac2aac"
 _WIN_WIDTH = 720
 _WIN_HEIGHT = 640
+
+# Maximum number of lines kept in the log widget. Older lines are
+# discarded so a long run cannot grow the widget without bound.
+_LOG_MAX_LINES = 5000
 
 
 def _bundled_ffmpeg() -> str:
@@ -100,10 +113,23 @@ class _ConversionWorker(threading.Thread):
         handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s", "%H:%M:%S"))
         root_logger.addHandler(handler)
         try:
+            def _on_progress(event: ProgressEvent) -> None:
+                self._queue.put({
+                    "type": "progress",
+                    "phase": event.phase,
+                    "album_index": event.album_index,
+                    "album_total": event.album_total,
+                    "track_index": event.track_index,
+                    "track_total": event.track_total,
+                    "files_done": event.files_done,
+                    "files_total": event.files_total,
+                })
+
             pipeline = Pipeline(
                 self._config,
                 dry_run=self._dry_run,
                 cancel_event=self._cancel_event,
+                progress_callback=_on_progress,
             )
             stats = pipeline.run()
             self._queue.put({"type": "done", "stats": stats})
@@ -127,8 +153,15 @@ class App(tk.Tk):
         self._queue: queue.Queue = queue.Queue()
         self._cancel_event: threading.Event = threading.Event()
         self._worker: Optional[_ConversionWorker] = None
+        # Total files to encode (grand total across all albums). Set
+        # when the pipeline emits its "ready" event so the progress bar
+        # can be sized up front.
         self._total_files = 0
+        # Monotonic grand total of files completed — used to ensure the
+        # bar value never goes backward even if a stale event arrives.
         self._processed_files = 0
+        # Running count of lines in the log widget, used to cap its size.
+        self._log_line_count = 0
 
         self._build_ui()
         self._set_running(False)
@@ -267,6 +300,17 @@ class App(tk.Tk):
         self._progress.pack(side="left", padx=(16, 8), fill="x", expand=True)
         self._progress_label = ttk.Label(ctrl_frame, text="0 / 0")
         self._progress_label.pack(side="left")
+
+        # ── Activity indicator ──────────────────────────────────────
+        # Live phase text ("Encoding album 3 / 12 — track 5 / 10",
+        # "Analysing loudness — album 3 / 12", "Moving album to output").
+        # Subtle gray, full-width, sits between the progress bar and
+        # the log so the user can always see what the app is doing
+        # without the bar itself having to flip to indeterminate.
+        self._activity_label = ttk.Label(
+            self, text="", anchor="w", padding=(10, 0), foreground="gray"
+        )
+        self._activity_label.pack(fill="x", pady=(0, 2))
 
         # ── Log ──────────────────────────────────────────────────────
         log_frame = ttk.LabelFrame(self, text="Log", padding=6)
@@ -437,12 +481,21 @@ class App(tk.Tk):
 
         self._total_files = 0
         self._processed_files = 0
-        self._progress.configure(mode="determinate", value=0, maximum=1)
-        self._progress_label.configure(text="0 / 0")
+        # Put the bar into indeterminate mode immediately so the user
+        # sees motion during the scan. The "ready" event from the
+        # pipeline will switch it back to determinate and size it
+        # against the real file count — no more "0 / 0" flash.
+        if str(self._progress["mode"]) == "indeterminate":
+            self._progress.stop()
+        self._progress.configure(mode="indeterminate", value=0, maximum=1)
+        self._progress.start(15)
+        self._progress_label.configure(text="")
+        self._activity_label.configure(text="Scanning…")
         self._status_label.configure(text="")
         self._log_text.configure(state="normal")
         self._log_text.delete("1.0", "end")
         self._log_text.configure(state="disabled")
+        self._log_line_count = 0
 
         self._cancel_event = threading.Event()
         self._worker = _ConversionWorker(config, self._queue, self._cancel_event, dry_run=dry_run)
@@ -472,38 +525,18 @@ class App(tk.Tk):
         kind = msg.get("type")
 
         if kind == "log":
-            text: str = msg["text"]
-            self._append_log(text)
+            self._append_log(msg["text"])
 
-            # Parse total file count from pipeline log line
-            if "file(s) to process" in text:
-                try:
-                    self._total_files = int(text.split("Found")[1].split("file")[0].strip())
-                    self._progress.configure(maximum=max(self._total_files, 1), value=0)
-                    self._progress_label.configure(text=f"0 / {self._total_files}")
-                except (IndexError, ValueError):
-                    pass
-
-            # Advance progress on each successfully encoded file
-            if "Encoded:" in text or "Encoding failed" in text or "Failed to process" in text:
-                self._processed_files += 1
-                self._progress.configure(value=self._processed_files)
-                self._progress_label.configure(text=f"{self._processed_files} / {self._total_files}")
-
-            # Switch to indeterminate during loudness analysis
-            if "Analysing loudness" in text:
-                self._progress.configure(mode="indeterminate")
-                self._progress.start(15)
-
-            # Switch back to determinate when the next album's encoding starts
-            if "Encoding " in text and "track(s)" in text:
-                self._progress.stop()
-                self._progress.configure(mode="determinate", value=self._processed_files)
+        elif kind == "progress":
+            self._handle_progress(msg)
 
         elif kind == "done":
             stats: ProcessingStats = msg["stats"]
             self._progress.stop()
-            self._progress.configure(mode="determinate", value=self._total_files)
+            # Snap the bar to the final known total so it lands at 100 %.
+            if self._total_files > 0:
+                self._progress.configure(mode="determinate", value=self._total_files)
+            self._activity_label.configure(text="Done.")
             self._status_label.configure(
                 text=f"Albums: {stats.albums_processed} ok, {stats.albums_failed} failed  |  "
                      f"Tracks: {stats.successful} ok, {stats.failed} failed, {stats.skipped} skipped"
@@ -513,6 +546,7 @@ class App(tk.Tk):
         elif kind == "error":
             self._progress.stop()
             self._progress.configure(mode="determinate")
+            self._activity_label.configure(text="Error.")
             self._append_log(f"ERROR: {msg['msg']}")
             messagebox.showerror("Conversion error", msg["msg"])
             self._set_running(False)
@@ -549,9 +583,98 @@ class App(tk.Tk):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _handle_progress(self, msg: dict) -> None:
+        """Apply a structured progress event from the pipeline.
+
+        The bar value is set from ``files_done`` and clamped so it can
+        only ever increase — even if a stale event somehow arrives out
+        of order. ``files_total`` is the only event that defines the
+        bar's maximum; subsequent events do not shrink it.
+        """
+        phase: str = msg.get("phase", "")
+        album_index: int = msg.get("album_index", 0)
+        album_total: int = msg.get("album_total", 0)
+        track_index: int = msg.get("track_index", 0)
+        track_total: int = msg.get("track_total", 0)
+        files_done: int = msg.get("files_done", 0)
+        files_total: int = msg.get("files_total", 0)
+
+        if phase == PHASE_SCANNING:
+            # Bar is indeterminate while we don't know the totals yet.
+            if str(self._progress["mode"]) != "indeterminate":
+                self._progress.configure(mode="indeterminate", value=0, maximum=1)
+                self._progress.start(15)
+            self._activity_label.configure(text="Scanning…")
+            self._progress_label.configure(text="")
+            return
+
+        if phase == PHASE_READY:
+            self._total_files = max(files_total, 0)
+            self._processed_files = 0
+            # Switch back to determinate and size the bar once we know
+            # the total file count.
+            if str(self._progress["mode"]) == "indeterminate":
+                self._progress.stop()
+            self._progress.configure(
+                mode="determinate", maximum=max(self._total_files, 1), value=0
+            )
+            self._progress_label.configure(
+                text=f"0 / {self._total_files}" if self._total_files else "0 / 0"
+            )
+            self._activity_label.configure(text="Starting…")
+            return
+
+        if files_total > 0:
+            # Lock the maximum in — later events never shrink it.
+            if self._total_files != files_total:
+                self._total_files = files_total
+            if float(self._progress["maximum"]) != files_total:
+                self._progress.configure(maximum=files_total)
+
+        # Ensure the bar is in determinate mode for the actual work
+        # (loudness and moving don't increment files_done, so we want
+        # the fill to stay put rather than flip to indeterminate).
+        if str(self._progress["mode"]) == "indeterminate":
+            self._progress.stop()
+            self._progress.configure(mode="determinate")
+
+        # Monotonic clamp: never go below the value already shown.
+        if files_done > self._processed_files:
+            self._processed_files = files_done
+        self._progress.configure(value=self._processed_files)
+        if self._total_files > 0:
+            self._progress_label.configure(
+                text=f"{self._processed_files} / {self._total_files}"
+            )
+
+        # Activity text. 1-based album/track numbers read more naturally.
+        if phase == PHASE_ENCODING:
+            self._activity_label.configure(
+                text=(
+                    f"Encoding album {album_index + 1} / {album_total}  —  "
+                    f"track {track_index} / {track_total}"
+                )
+            )
+        elif phase == PHASE_LOUDNESS:
+            self._activity_label.configure(
+                text=f"Analysing loudness  —  album {album_index + 1} / {album_total}"
+            )
+        elif phase == PHASE_MOVING:
+            self._activity_label.configure(
+                text=f"Moving album to output  —  album {album_index + 1} / {album_total}"
+            )
+
     def _append_log(self, text: str) -> None:
         self._log_text.configure(state="normal")
         self._log_text.insert("end", text + "\n")
+        self._log_line_count += 1
+        # Cap the log size so a very long run can't grow the widget
+        # without bound. Deleting from the top keeps the most recent
+        # output visible.
+        if self._log_line_count > _LOG_MAX_LINES:
+            excess = self._log_line_count - _LOG_MAX_LINES
+            self._log_text.delete("1.0", f"{excess + 1}.0")
+            self._log_line_count = _LOG_MAX_LINES
         self._log_text.see("end")
         self._log_text.configure(state="disabled")
 
