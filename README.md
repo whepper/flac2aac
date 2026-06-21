@@ -150,6 +150,10 @@ diskutil erasevolume HFS+ RAMDisk $(hdiutil attach -nomount ram://2097152)
 # hdiutil detach /Volumes/RAMDisk
 ```
 
+> In the GUI, clicking **Create** makes the RAM disk for you, and
+> closing the app auto-ejects it. Uncheck **Auto-eject on exit** in the
+> Folders panel if you want the mount to survive between sessions.
+
 **Linux** — mount a tmpfs:
 ```bash
 sudo mkdir -p /mnt/ramdisk

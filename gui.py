@@ -3,6 +3,7 @@
 Bundle with PyInstaller using flac2aac_gui.spec.
 """
 
+import atexit
 import logging
 import queue
 import sys
@@ -162,10 +163,23 @@ class App(tk.Tk):
         self._processed_files = 0
         # Running count of lines in the log widget, used to cap its size.
         self._log_line_count = 0
+        # Tracks whether the RAM disk currently in use was created by
+        # this app instance, so the close-time auto-eject only detaches
+        # what we made ourselves.
+        self._ramdisk_created_by_app = False
+        # User toggle for close-time auto-eject. Defaulted to True per
+        # the "always clean up" expectation.
+        self._auto_eject_var = tk.BooleanVar(value=True)
 
         self._build_ui()
         self._set_running(False)
         self.after(100, self._poll_queue)
+        # Intercept the window-close button (and Cmd-W on macOS) so we
+        # can stop the worker and detach the RAM disk before exiting.
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        # Safety net for uncaught errors that propagate out of mainloop
+        # before WM_DELETE_WINDOW can run.
+        atexit.register(self._auto_eject_on_exit)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -205,8 +219,15 @@ class App(tk.Tk):
         self._create_rd_btn.pack(side="left", padx=(12, 4))
         self._eject_rd_btn = ttk.Button(rd_ctrl, text="Eject", command=self._eject_ramdisk, width=8)
         self._eject_rd_btn.pack(side="left")
-        ttk.Label(folder_frame, text="Optional — encode here first, then move to output", foreground="gray").grid(
-            row=4, column=1, sticky="w")
+        opts_row = ttk.Frame(folder_frame)
+        opts_row.grid(row=4, column=1, sticky="w")
+        ttk.Label(
+            opts_row, text="Optional — encode here first, then move to output",
+            foreground="gray",
+        ).pack(side="left")
+        ttk.Checkbutton(
+            opts_row, text="Auto-eject on exit", variable=self._auto_eject_var,
+        ).pack(side="left", padx=(12, 0))
 
         # ── Encoding ─────────────────────────────────────────────────
         enc_frame = ttk.LabelFrame(self, text="Encoding", padding=6)
@@ -554,6 +575,7 @@ class App(tk.Tk):
         elif kind == "ramdisk_created":
             mount = msg["path"]
             self._workdir_var.set(mount)
+            self._ramdisk_created_by_app = True
             self._append_log(f"RAM disk ready at {mount}")
             self._progress.stop()
             self._progress.configure(mode="determinate", value=0)
@@ -564,6 +586,7 @@ class App(tk.Tk):
         elif kind == "ramdisk_ejected":
             self._append_log(f"RAM disk ejected: {msg['path']}")
             self._workdir_var.set("")
+            self._ramdisk_created_by_app = False
             self._progress.stop()
             self._progress.configure(mode="determinate", value=0)
             self._progress_label.configure(text="")
@@ -686,6 +709,77 @@ class App(tk.Tk):
         self._create_rd_btn.configure(state=state)
         self._eject_rd_btn.configure(state=state)
         self._cancel_btn.configure(state="normal" if running else "disabled")
+
+    # ------------------------------------------------------------------
+    # Shutdown
+    # ------------------------------------------------------------------
+
+    def _detach_ramdisk(self) -> None:
+        """Run ``hdiutil detach /Volumes/RAMDisk`` and log the outcome.
+
+        The RAM disk the app creates is always mounted at
+        ``/Volumes/RAMDisk`` (the volume label is hard-coded in
+        ``_create_ramdisk``), so we always target that exact path.
+        """
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["hdiutil", "detach", "/Volumes/RAMDisk"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            self._append_log("Auto-eject: hdiutil detach timed out.")
+            return
+        except Exception as exc:  # pragma: no cover — defensive
+            self._append_log(f"Auto-eject failed: {exc}")
+            return
+        if result.returncode == 0:
+            self._append_log("Auto-ejected RAM disk on exit.")
+        else:
+            # Non-zero is normal when the disk is already gone.
+            err = (result.stderr or result.stdout or "").strip()
+            self._append_log(f"Auto-eject skipped: {err or 'disk already detached'}")
+
+    def _auto_eject_on_exit(self) -> None:
+        """atexit safety net: detach the RAM disk if the app created one.
+
+        Runs on interpreter shutdown regardless of how we got there
+        (WM_DELETE_WINDOW, uncaught exception, normal exit). Swallows
+        everything — at this point Tk widgets may already be gone, so
+        we can't reliably touch the log widget.
+        """
+        if not self._ramdisk_created_by_app:
+            return
+        try:
+            if not self._auto_eject_var.get():
+                return
+        except Exception:
+            return
+        import subprocess
+        try:
+            subprocess.run(
+                ["hdiutil", "detach", "/Volumes/RAMDisk"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except Exception:
+            pass
+        finally:
+            self._ramdisk_created_by_app = False
+
+    def _on_close(self) -> None:
+        """Window-close handler: stop the worker, then detach the RAM disk."""
+        # If a conversion is running, ask it to wind down so we don't
+        # yank the scratch directory out from under the pipeline.
+        if self._worker is not None and self._worker.is_alive():
+            self._cancel_event.set()
+            self._worker.join(timeout=2.0)
+
+        if self._ramdisk_created_by_app and self._auto_eject_var.get():
+            self._detach_ramdisk()
+            # Clear the flag so the atexit fallback doesn't double-call.
+            self._ramdisk_created_by_app = False
+
+        self.destroy()
 
 
 if __name__ == "__main__":
