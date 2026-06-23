@@ -170,6 +170,15 @@ class App(tk.Tk):
         # User toggle for close-time auto-eject. Defaulted to True per
         # the "always clean up" expectation.
         self._auto_eject_var = tk.BooleanVar(value=True)
+        # Plain Python mirror of _auto_eject_var kept in sync via the
+        # Checkbutton command callback. The atexit handler runs after Tk
+        # has been destroyed, so reading a BooleanVar at that point raises
+        # TclError. Caching the value here keeps _auto_eject_on_exit()
+        # safe without touching any Tk object.
+        self._auto_eject_enabled: bool = True
+        # Mountpoint cached in _on_close() before self.destroy() so both
+        # the inline eject and the atexit fallback target the right path.
+        self._ramdisk_mount_path: str = "/Volumes/RAMDisk"
 
         self._build_ui()
         self._set_running(False)
@@ -227,6 +236,7 @@ class App(tk.Tk):
         ).pack(side="left")
         ttk.Checkbutton(
             opts_row, text="Auto-eject on exit", variable=self._auto_eject_var,
+            command=self._on_auto_eject_toggle,
         ).pack(side="left", padx=(12, 0))
 
         # ── Encoding ─────────────────────────────────────────────────
@@ -366,6 +376,10 @@ class App(tk.Tk):
         state = "normal" if self._cover_file_var.get() else "disabled"
         self._cover_max_size_spin.configure(state=state)
         self._cover_jpeg_quality_spin.configure(state=state)
+
+    def _on_auto_eject_toggle(self) -> None:
+        """Keep the plain-Python mirror in sync with the Checkbutton."""
+        self._auto_eject_enabled = self._auto_eject_var.get()
 
     def _browse_workdir(self) -> None:
         path = filedialog.askdirectory(title="Select RAM disk / work directory")
@@ -715,16 +729,18 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
 
     def _detach_ramdisk(self) -> None:
-        """Run ``hdiutil detach /Volumes/RAMDisk`` and log the outcome.
+        """Run ``hdiutil detach <path>`` and log the outcome.
 
-        The RAM disk the app creates is always mounted at
-        ``/Volumes/RAMDisk`` (the volume label is hard-coded in
-        ``_create_ramdisk``), so we always target that exact path.
+        The path is read from the RAM-disk field so that custom
+        mountpoints (i.e. anything other than ``/Volumes/RAMDisk``)
+        are ejected correctly.  Falls back to ``/Volumes/RAMDisk``
+        when the field is empty.
         """
         import subprocess
+        path = self._workdir_var.get().strip() or "/Volumes/RAMDisk"
         try:
             result = subprocess.run(
-                ["hdiutil", "detach", "/Volumes/RAMDisk"],
+                ["hdiutil", "detach", path],
                 capture_output=True, text=True, timeout=5,
             )
         except subprocess.TimeoutExpired:
@@ -734,7 +750,7 @@ class App(tk.Tk):
             self._append_log(f"Auto-eject failed: {exc}")
             return
         if result.returncode == 0:
-            self._append_log("Auto-ejected RAM disk on exit.")
+            self._append_log(f"Auto-ejected RAM disk: {path}")
         else:
             # Non-zero is normal when the disk is already gone.
             err = (result.stderr or result.stdout or "").strip()
@@ -747,18 +763,24 @@ class App(tk.Tk):
         (WM_DELETE_WINDOW, uncaught exception, normal exit). Swallows
         everything — at this point Tk widgets may already be gone, so
         we can't reliably touch the log widget.
+
+        Uses ``_auto_eject_enabled`` (a plain Python bool) instead of
+        ``_auto_eject_var.get()`` because the BooleanVar raises
+        ``TclError`` once the Tk interpreter has been destroyed.
+
+        Uses ``_ramdisk_mount_path`` (cached before Tk teardown in
+        ``_on_close``) so the correct mountpoint is always targeted,
+        even when it differs from the default ``/Volumes/RAMDisk``.
         """
         if not self._ramdisk_created_by_app:
             return
-        try:
-            if not self._auto_eject_var.get():
-                return
-        except Exception:
+        if not self._auto_eject_enabled:
             return
         import subprocess
+        path = self._ramdisk_mount_path
         try:
             subprocess.run(
-                ["hdiutil", "detach", "/Volumes/RAMDisk"],
+                ["hdiutil", "detach", path],
                 capture_output=True, text=True, timeout=5,
             )
         except Exception:
@@ -774,7 +796,14 @@ class App(tk.Tk):
             self._cancel_event.set()
             self._worker.join(timeout=2.0)
 
-        if self._ramdisk_created_by_app and self._auto_eject_var.get():
+        # Cache Tk-backed values *before* destroy() tears down the Tk
+        # interpreter.  Both the inline eject below and the atexit
+        # fallback read these plain Python attributes, so they remain
+        # safe to access even after the widget tree is gone.
+        self._auto_eject_enabled = self._auto_eject_var.get()
+        self._ramdisk_mount_path = self._workdir_var.get().strip() or "/Volumes/RAMDisk"
+
+        if self._ramdisk_created_by_app and self._auto_eject_enabled:
             self._detach_ramdisk()
             # Clear the flag so the atexit fallback doesn't double-call.
             self._ramdisk_created_by_app = False
